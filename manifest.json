@@ -54,6 +54,23 @@
         "en"
       ],
       "supportsExternalPlayer": true
+    },
+    {
+      "id": "moviesda",
+      "name": "Moviesda",
+      "description": "Moviesda provider for Nuvio. Uses multi-level extraction for direct MP4 streams.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie"
+      ],
+      "filename": "src/providers/moviesda.js",
+      "enabled": true,
+      "contentLanguage": [
+        "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
     }
   ]
 }
