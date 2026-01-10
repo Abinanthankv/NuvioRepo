@@ -1,0 +1,27 @@
+{
+    "name": "nuvio-providers",
+    "version": "1.0.0",
+    "description": "Providers for Nuvio Streaming",
+    "scripts": {
+        "build": "node build.js",
+        "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
+        "build:provider": "node build.js",
+        "start": "node server.js"
+    },
+    "devDependencies": {
+        "cheerio": "^1.1.2",
+        "cheerio-without-node-native": "^0.20.2",
+        "esbuild": "^0.20.0",
+        "nodemon": "^3.0.0"
+    },
+    "keywords": [
+        "nuvio",
+        "streaming",
+        "providers"
+    ],
+    "license": "GPL-3.0",
+    "dependencies": {
+        "axios": "^1.13.2",
+        "crypto-js": "^4.2.0"
+    }
+}

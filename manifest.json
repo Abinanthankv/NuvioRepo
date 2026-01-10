@@ -1,0 +1,59 @@
+{
+  "name": "Spidey's  Providers",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "tamilmv",
+      "name": "TamilMV",
+      "description": "TamilMV provider for Nuvio. Uses direct links from the homepage.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/tamilmv.js",
+      "enabled": true,
+      "contentLanguage": [
+        "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "tamilblasters",
+      "name": "Tamilblasters",
+      "description": "Tamilblasters provider for Nuvio. Uses search-based forum scraping.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/tamilblasters.js",
+      "enabled": true,
+      "contentLanguage": [
+        "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "tamilian",
+      "name": "Tamilian",
+      "description": "Tamilian provider for Nuvio. Uses direct high-quality streams.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie"
+      ],
+      "filename": "src/providers/tamilian.js",
+      "enabled": true,
+      "contentLanguage": [
+        "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    }
+  ]
+}
