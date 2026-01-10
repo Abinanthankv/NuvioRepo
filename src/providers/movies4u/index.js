@@ -145,11 +145,17 @@ function unpack(p, a, c, k) {
 }
 
 /**
- * Resolves a master HLS playlist to get the first variant stream
+ * Resolves a master HLS playlist to get the first variant stream and audio info
  * @param {string} masterUrl The master playlist URL
- * @returns {Promise<string>} The variant stream URL
+ * @returns {Promise<Object>} Object containing resolved URL and audio tracks
  */
 async function resolveHlsPlaylist(masterUrl) {
+    const result = {
+        url: masterUrl,
+        audios: [],
+        isMaster: false
+    };
+
     try {
         const response = await fetchWithTimeout(masterUrl, {
             headers: {
@@ -158,10 +164,18 @@ async function resolveHlsPlaylist(masterUrl) {
             }
         }, 5000);
 
-        if (!response.ok) return masterUrl;
+        if (!response.ok) return result;
 
         const content = await response.text();
-        if (!content.includes('#EXTM3U')) return masterUrl;
+        if (!content.includes('#EXTM3U')) return result;
+
+        result.isMaster = true;
+
+        // Parse audio tracks (#EXT-X-MEDIA:TYPE=AUDIO)
+        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"/g);
+        for (const match of audioMatches) {
+            result.audios.push(match[1]);
+        }
 
         // Look for variant playlists (#EXT-X-STREAM-INF)
         const lines = content.split('\n');
@@ -172,17 +186,19 @@ async function resolveHlsPlaylist(masterUrl) {
                     // Resolve relative path
                     if (!variantPath.startsWith('http')) {
                         const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
-                        return baseUrl + variantPath;
+                        result.url = baseUrl + variantPath;
+                    } else {
+                        result.url = variantPath;
                     }
-                    return variantPath;
+                    break; // Just get the first one for now
                 }
             }
         }
 
-        return masterUrl;
+        return result;
     } catch (error) {
         console.error(`[Movies4u] HLS resolution error: ${error.message}`);
-        return masterUrl;
+        return result;
     }
 }
 
@@ -313,13 +329,38 @@ async function extractFromM4UPlay(embedUrl) {
             // Check if it's a master playlist and resolve to a variant if so
             if (finalStreamUrl.includes('master.')) {
                 console.log(`[Movies4u] Resolving master playlist...`);
-                const resolvedUrl = await resolveHlsPlaylist(finalStreamUrl);
-                if (resolvedUrl !== finalStreamUrl) {
-                    console.log(`[Movies4u] Resolved to variant: ${resolvedUrl}`);
-                    return resolvedUrl;
+                const resolutionResult = await resolveHlsPlaylist(finalStreamUrl);
+
+                if (resolutionResult.isMaster) {
+                    let audioInfo = "";
+                    if (resolutionResult.audios.length > 1) {
+                        audioInfo = ` [Multi Audio: ${resolutionResult.audios.join(', ')}]`;
+                        console.log(`[Movies4u] Found multi-audio: ${resolutionResult.audios.join(', ')}`);
+                        // For multi-audio, we might want to return the master URL instead of variant 
+                        // so the player can switch, but usually direct variant is preferred if it has embedded audio.
+                        // However, m4uplay multi-audio uses separate playlists, so returning the MASTER is better.
+                        return {
+                            url: finalStreamUrl,
+                            audios: resolutionResult.audios,
+                            audioInfo: audioInfo
+                        };
+                    }
+
+                    if (resolutionResult.url !== finalStreamUrl) {
+                        console.log(`[Movies4u] Resolved to variant: ${resolutionResult.url}`);
+                        return {
+                            url: resolutionResult.url,
+                            audios: resolutionResult.audios,
+                            audioInfo: ""
+                        };
+                    }
                 }
             }
-            return finalStreamUrl;
+            return {
+                url: finalStreamUrl,
+                audios: [],
+                audioInfo: ""
+            };
         }
 
         console.log(`[Movies4u] Could not extract stream URL from m4uplay embed`);
@@ -510,13 +551,16 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         const streams = [];
 
         for (const watchLink of watchLinks) {
-            const streamUrl = await extractFromM4UPlay(watchLink.url);
+            const extractionResult = await extractFromM4UPlay(watchLink.url);
 
-            if (streamUrl) {
+            if (extractionResult && extractionResult.url) {
+                const cleanTitle = bestMatch.title.split("(")[0].trim();
+                const displayTitle = extractionResult.audioInfo ? `${cleanTitle}${extractionResult.audioInfo}` : cleanTitle;
+
                 streams.push({
                     name: "Movies4u",
-                    title: bestMatch.title.split("(")[0].trim(), // Clean title
-                    url: streamUrl,
+                    title: displayTitle,
+                    url: extractionResult.url,
                     quality: watchLink.quality,
                     headers: {
                         "Referer": M4UPLAY_BASE,
