@@ -168,6 +168,37 @@ async function getTMDBDetails(tmdbId, mediaType) {
 }
 
 /**
+ * Searches TMDB by movie title to get year
+ */
+async function searchTMDBByTitle(title, mediaType) {
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const url = `${TMDB_BASE_URL}/search/${type}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(title)}`;
+
+    try {
+        console.log(`[Moviesda] Searching TMDB for: "${title}"`);
+        const response = await fetchWithTimeout(url, {}, 8000);
+        const data = await response.json();
+
+        if (data.results && data.results.length > 0) {
+            // Get the first (most popular) result
+            const firstResult = data.results[0];
+            const info = {
+                title: firstResult.title || firstResult.name,
+                year: (firstResult.release_date || firstResult.first_air_date || "").split("-")[0]
+            };
+            console.log(`[Moviesda] TMDB Search Result: "${info.title}" (${info.year || 'N/A'})`);
+            return info;
+        }
+
+        console.log(`[Moviesda] No TMDB results found for "${title}"`);
+        return null;
+    } catch (error) {
+        console.error("[Moviesda] Error searching TMDB:", error.message);
+        return null;
+    }
+}
+
+/**
  * Searches Moviesda by browsing category pages
  * Moviesda doesn't have real search - it uses category pages with movie listings
  */
@@ -705,8 +736,19 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                 mediaInfo = { title: tmdbId, year: null };
             }
         } else {
-            console.log(`[Moviesda] Using "${tmdbId}" as search query directly`);
-            mediaInfo = { title: tmdbId, year: null };
+            // It's a title string - try to search TMDB to get the year
+            console.log(`[Moviesda] Using "${tmdbId}" as search query`);
+            try {
+                const tmdbResult = await searchTMDBByTitle(tmdbId, mediaType);
+                if (tmdbResult && tmdbResult.year) {
+                    mediaInfo = tmdbResult;
+                } else {
+                    mediaInfo = { title: tmdbId, year: null };
+                }
+            } catch (error) {
+                console.log(`[Moviesda] TMDB search failed: ${error.message}`);
+                mediaInfo = { title: tmdbId, year: null };
+            }
         }
 
         console.log(`[Moviesda] Looking for: "${mediaInfo.title}" (${mediaInfo.year || 'N/A'})`);
@@ -717,7 +759,100 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         const bestMatch = findBestTitleMatch(mediaInfo, searchResults);
 
         if (!bestMatch) {
-            console.warn("[Moviesda] No matching title found");
+            console.warn("[Moviesda] No matching title found in category pages");
+
+            // Fallback: Try direct URL construction
+            // Moviesda URL pattern: https://moviesda15.com/[title]-[year]-tamil-movie/
+            const currentYear = new Date().getFullYear();
+            const yearsToTry = mediaInfo.year ?
+                [mediaInfo.year, currentYear, currentYear - 1] :
+                // Try recent years first (most likely), then expand backwards to 2010
+                [currentYear, currentYear - 1, currentYear + 1,
+                    currentYear - 2, currentYear - 3, currentYear - 4];
+
+            for (const year of yearsToTry) {
+                const slug = mediaInfo.title.toLowerCase()
+                    .replace(/[^a-z0-9\s]/g, '')
+                    .replace(/\s+/g, '-');
+                const directUrl = `${MAIN_URL}/${slug}-${year}-tamil-movie/`;
+
+                console.log(`[Moviesda] Trying direct URL: ${directUrl}`);
+
+                try {
+                    const response = await fetchWithTimeout(directUrl, { headers: HEADERS }, 5000);
+                    if (response.ok) {
+                        const html = await response.text();
+                        // Check if it's a valid movie page (not 404)
+                        if (html.includes('entry-title') || html.includes('movie')) {
+                            console.log(`[Moviesda] ✓ Direct URL found: ${directUrl}`);
+                            // Parse this page directly
+                            const rawStreams = await parseMoviePage(directUrl);
+                            if (rawStreams.length > 0) {
+                                // Process streams (same logic as below)
+                                const limitedStreams = rawStreams.slice(0, 5);
+                                const finalStreams = [];
+
+                                for (const stream of limitedStreams) {
+                                    let finalUrl = stream.url;
+
+                                    if (stream.type === "download") {
+                                        try {
+                                            const result = await Promise.race([
+                                                extractFinalDownloadUrl(stream.url),
+                                                new Promise((_, reject) =>
+                                                    setTimeout(() => reject(new Error('Extraction timeout')), 5000)
+                                                )
+                                            ]);
+
+                                            if (!result) continue;
+
+                                            if (result.needsExtraction) {
+                                                try {
+                                                    const directUrl = await Promise.race([
+                                                        extractFromOnestream(result.url),
+                                                        new Promise((_, reject) =>
+                                                            setTimeout(() => reject(new Error('Onestream extraction timeout')), 5000)
+                                                        )
+                                                    ]);
+                                                    if (!directUrl) continue;
+                                                    finalUrl = directUrl;
+                                                } catch (error) {
+                                                    console.error(`[Moviesda] Onestream extraction failed: ${error.message}`);
+                                                    continue;
+                                                }
+                                            } else {
+                                                finalUrl = result.url;
+                                            }
+                                        } catch (error) {
+                                            console.error(`[Moviesda] Download URL extraction failed: ${error.message}`);
+                                            continue;
+                                        }
+                                    }
+
+                                    finalStreams.push({
+                                        name: "Moviesda",
+                                        title: `${mediaInfo.title} (${mediaInfo.year || 'N/A'}) - ${stream.quality}`,
+                                        url: finalUrl,
+                                        quality: stream.quality || "Unknown",
+                                        headers: {
+                                            "Referer": MAIN_URL,
+                                            "User-Agent": HEADERS["User-Agent"]
+                                        },
+                                        provider: 'Moviesda'
+                                    });
+                                }
+
+                                console.log(`[Moviesda] Successfully extracted ${finalStreams.length} streams`);
+                                return finalStreams;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.log(`[Moviesda] Direct URL failed for ${year}: ${error.message}`);
+                }
+            }
+
+            console.warn("[Moviesda] No results found via category search or direct URL");
             return [];
         }
 
