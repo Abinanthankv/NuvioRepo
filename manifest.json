@@ -71,6 +71,24 @@
         "en"
       ],
       "supportsExternalPlayer": true
+    },
+    {
+      "id": "movies4u",
+      "name": "Movies4u",
+      "description": "Movies4u provider for Nuvio. Features Packer deobfuscation and HLS master resolution.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie"
+      ],
+      "filename": "src/providers/movies4u.js",
+      "enabled": true,
+      "contentLanguage": [
+        "en",
+        "ta",
+        "hi"
+      ],
+      "supportsExternalPlayer": true
     }
   ]
 }
