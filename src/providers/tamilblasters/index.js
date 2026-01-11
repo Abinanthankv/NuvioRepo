@@ -47,6 +47,14 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
 }
 
 /**
+ * Converts string to Title Case
+ */
+function toTitleCase(str) {
+  if (!str) return '';
+  return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+}
+
+/**
  * Normalizes title for comparison
  * @param {string} title 
  * @returns {string}
@@ -147,6 +155,41 @@ function findAllTitleMatches(mediaInfo, searchResults) {
   return matches;
 }
 
+/**
+ * Formats the stream title according to the premium standard
+ */
+function formatStreamTitle(mediaInfo, stream) {
+  const { title, year } = mediaInfo;
+  const { quality, type, size, language, seasonCode, episodeCode, label, baseTitle } = stream;
+
+  // Use baseTitle from stream if info title is just the search query
+  const displayTitle = (title.toLowerCase() === baseTitle.toLowerCase() || title === title.toLowerCase()) ? baseTitle : title;
+
+  // Prioritize year from stream if mediaInfo year is missing
+  const displayYear = year || stream.year;
+  const yearStr = displayYear ? ` (${displayYear})` : "";
+  const isTV = !!(seasonCode || episodeCode);
+
+  let tapeLine = `📼: ${displayTitle}${yearStr}`;
+  if (isTV) {
+    tapeLine += ` - ${seasonCode || 'S01'} ${episodeCode || ''}`;
+  } else if (label && !label.includes('Stream')) {
+    tapeLine += ` (${label})`;
+  }
+  tapeLine += ` - ${quality !== 'Unknown' ? quality : ''}`;
+
+  const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
+  const sizeLine = (size && size !== "UNKNOWN") ? `💾: ${size} | 🚜: tamilblasters\n` : "";
+
+  // Language display
+  let lang = language || "TAMIL";
+  if (stream.audioInfo) lang = stream.audioInfo;
+
+  return `Tamilblasters (Instant) (${quality})
+${typeLine}${tapeLine}
+${sizeLine}🌐: ${lang.toUpperCase()}`;
+}
+
 // =================================================================================
 // CORE FUNCTIONS
 // =================================================================================
@@ -228,6 +271,9 @@ async function search(query) {
  * @param {string} m3u8Url The m3u8 URL
  * @returns {Promise<Array<{url: string, quality: string}>>} Array of video variants
  */
+/**
+ * Detects quality variants and audio tracks from m3u8 stream manifest
+ */
 async function detectQualityFromM3U8(m3u8Url) {
   try {
     const response = await fetchWithTimeout(m3u8Url, {
@@ -239,18 +285,30 @@ async function detectQualityFromM3U8(m3u8Url) {
     const content = await response.text();
 
     if (!content.includes('#EXTM3U')) {
-      return [{ url: m3u8Url, quality: "Unknown" }];
+      return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [] };
     }
 
     const variants = [];
+    const audios = [];
 
-    // Check if it's a master playlist with multiple streams
+    // Parse audio tracks
+    const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"(?:.*?CHANNELS="([^"]+)")?/g);
+    for (const match of audioMatches) {
+      let audioName = match[1];
+      const channels = match[2];
+      if (channels) {
+        const channelMap = { "1": "1.0", "2": "2.0", "6": "5.1", "8": "7.1" };
+        audioName += ` (${channelMap[channels] || channels})`;
+      }
+      if (!audios.includes(audioName)) audios.push(audioName);
+    }
+
+    // Check for variant playlists
     if (content.includes('#EXT-X-STREAM-INF')) {
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        if (line.startsWith('#EXT-X-STREAM-INF')) {
-          // Extract resolution
+        if (line.includes('#EXT-X-STREAM-INF')) {
           let quality = "Unknown";
           const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
           if (resMatch) {
@@ -262,11 +320,12 @@ async function detectQualityFromM3U8(m3u8Url) {
             else quality = `${height}p`;
           }
 
-          // Next line should be the URL
-          if (i + 1 < lines.length) {
-            let variantUrl = lines[i + 1].trim();
+          let j = i + 1;
+          while (j < lines.length && (lines[j].trim().startsWith('#') || !lines[j].trim())) j++;
+
+          if (j < lines.length) {
+            let variantUrl = lines[j].trim();
             if (variantUrl && !variantUrl.startsWith('#')) {
-              // Resolve relative URL
               if (!variantUrl.startsWith('http')) {
                 const baseUrl = m3u8Url.substring(0, m3u8Url.lastIndexOf('/') + 1);
                 variantUrl = baseUrl + variantUrl;
@@ -274,29 +333,24 @@ async function detectQualityFromM3U8(m3u8Url) {
               variants.push({ url: variantUrl, quality });
             }
           }
+          i = j;
         }
       }
     }
 
     if (variants.length > 0) {
-      // Sort variants by quality (best first)
       const qualityWeights = { "4K": 2160, "1080p": 1080, "720p": 720, "480p": 480, "Unknown": 0 };
-      variants.sort((a, b) => {
-        const weightA = qualityWeights[a.quality] || parseInt(a.quality) || 0;
-        const weightB = qualityWeights[b.quality] || parseInt(b.quality) || 0;
-        return weightB - weightA;
-      });
-      return variants;
+      variants.sort((a, b) => (qualityWeights[b.quality] || 0) - (qualityWeights[a.quality] || 0));
+      return { variants, audios };
     }
 
-    // Fallback for single variant m3u8
     const qualityMatch = content.match(/\b(2160p|1080p|720p|480p|4K|UHD|HD)\b/i);
     const quality = qualityMatch ? qualityMatch[0] : "Unknown";
 
-    return [{ url: m3u8Url, quality }];
+    return { variants: [{ url: m3u8Url, quality }], audios };
   } catch (error) {
-    console.error(`[Tamilblasters] Error detecting quality from m3u8: ${error.message}`);
-    return [{ url: m3u8Url, quality: "Unknown" }];
+    console.error(`[Tamilblasters] Error detecting quality: ${error.message}`);
+    return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [] };
   }
 }
 
@@ -450,9 +504,9 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         };
       }
     } else {
-      console.log(`[Tamilblasters] Using "${tmdbId}" as search query directly`);
+      console.log(`[Tamilblasters] Using "${tmdbId}" as search query indirectly`);
       mediaInfo = {
-        title: tmdbId,
+        title: toTitleCase(tmdbId),
         year: null
       };
     }
@@ -498,6 +552,20 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         console.log(`[Tamilblasters] Full Page Title: ${fullPageTitle}`);
 
         const rawStreams = [];
+
+        // Parse match title once for this match
+        const matchTitle = match.title;
+        const yearMatch = matchTitle.match(/[\(\[](\d{4})[\)\]]/);
+        let movieName = matchTitle;
+        let yearStr = "";
+        let baseLanguage = "Original";
+
+        if (yearMatch) {
+          yearStr = yearMatch[1];
+          movieName = matchTitle.split(yearMatch[0])[0].trim();
+          baseLanguage = matchTitle.split(yearMatch[0])[1]?.trim() || "Original";
+        }
+
         $("iframe").each((i, el) => {
           let streamurl = $(el).attr("src");
           if (!streamurl || streamurl.includes("google.com") || streamurl.includes("youtube.com"))
@@ -507,11 +575,9 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
           let episodeLabel = "";
           let current = $(el);
 
-          // Search up to 5 preceding siblings or parent's siblings
           for (let j = 0; j < 5; j++) {
             let prev = current.prev();
             if (prev.length === 0) {
-              // Try parent's previous if no more siblings
               current = current.parent();
               if (current.is("body") || current.length === 0) break;
               continue;
@@ -525,83 +591,64 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             current = prev;
           }
 
-          let label = episodeLabel || ($(el).closest("div").prev("p").text().trim()) || "Stream " + (i + 1);
-
-          // Parse title: "The Raja Saab (2026) Telugu" -> "The Raja Saab(2026)-Telugu (Stream 2)"
-          const matchTitle = match.title;
-          const matchData = matchTitle.match(/^(.*?)\s*\((\d{4})\)\s*(.*)$/);
-          let movieName = matchTitle;
-          let year = "";
-          let language = "";
-
-          if (matchData) {
-            movieName = matchData[1].trim();
-            year = `(${matchData[2]})`;
-            language = matchData[3].trim() || "Original";
-          } else {
-            // Fallback for titles without clear year in parentheses
-            const fallbackMatch = matchTitle.match(/^(.*?)\s*\(([^)]+)\)$/);
-            if (fallbackMatch) {
-              movieName = fallbackMatch[1].trim();
-              language = fallbackMatch[2].trim();
-            }
-          }
+          let displayLabel = episodeLabel || ($(el).closest("div").prev("p").text().trim()) || "Stream " + (i + 1);
 
           // Clean up label if it contains "Episode" to make it more concise
-          let displayLabel = label;
-          if (label.toLowerCase().includes("episode")) {
-            const epMatch = label.match(/Episode\s*[–-ー]\s*(\d+)/i) || label.match(/Episode\s*(\d+)/i);
+          if (displayLabel.toLowerCase().includes("episode")) {
+            const epMatch = displayLabel.match(/Episode\s*[–-ー]\s*(\d+)/i) || displayLabel.match(/Episode\s*(\d+)/i);
             if (epMatch) {
               displayLabel = `EP${epMatch[1]}`;
             }
           }
 
-          let finalTitle;
-
-          // Auto-detect if this is a TV show based on the match title OR the component label
+          // Auto-detect if this is a TV show
           const isTVShow = mediaType === 'tv' ||
             matchTitle.match(/S\d+.*EP/i) ||
             matchTitle.match(/Season.*Episode/i) ||
             displayLabel.match(/EP\s*\d+/i) ||
             displayLabel.match(/Episode\s*\d+/i);
 
-          if (isTVShow) {
-            // Extract Season from post title using regex, default to 1
-            const sMatch = matchTitle.match(/S(\d+)/i);
-            const seasonCode = sMatch ? `s${sMatch[1].padStart(2, '0')}` : 's01';
+          let seasonCode = "";
+          let episodeCode = "";
+          let langStr = baseLanguage;
 
-            // Extract Episode from displayLabel (preferred) or post title
+          if (isTVShow) {
+            const sMatch = matchTitle.match(/S(\d+)/i);
+            seasonCode = sMatch ? `S${sMatch[1].padStart(2, '0')}` : 'S01';
+
             let episodeNum = null;
             const epLabelMatch = displayLabel.match(/EP\s*(\d+)/i) || displayLabel.match(/Episode\s*(\d+)/i);
             if (epLabelMatch) {
               episodeNum = epLabelMatch[1];
             } else {
-              // Fallback to title
               const epTitleMatch = matchTitle.match(/EP\s*(\d+)/i);
               if (epTitleMatch) episodeNum = epTitleMatch[1];
             }
+            episodeCode = episodeNum ? `E${episodeNum.padStart(2, '0')}` : displayLabel;
 
-            const episodeCode = episodeNum ? `e${episodeNum.padStart(2, '0')}` : displayLabel;
-
-
-            // Clean up language string (remove season/episode markers)
-            let langClean = language.replace(/S\d+/gi, '')
-              .replace(/EP\s*\(.*?\)/gi, '')
-              .replace(/EP\d+/gi, '')
-              .replace(/\s+/g, ' ')
-              .trim();
-            // Remove leading/trailing dashes, brackets, or commas that might be left over
-            langClean = langClean.replace(/^[-\s,[\]]+|[-\s,[\]]+$/g, '').trim();
-
-            finalTitle = `${movieName}${year}-${seasonCode} ${episodeCode}${langClean ? ' - ' + langClean : ''}`;
-          } else {
-            finalTitle = `${movieName}${year}${language ? '-' + language : ''} (${displayLabel})`;
+            langStr = langStr.replace(/S\d+/gi, '').replace(/EP\s*\(.*?\)/gi, '').replace(/EP\d+/gi, '').replace(/\s+/g, ' ').trim();
+            langStr = langStr.replace(/^[-\s,[\]]+|[-\s,[\]]+$/g, '').trim();
           }
 
-          // Quality will be detected from m3u8 stream later
+          // Detect type (WEB-DL, BluRay, etc.)
+          let type = "UNKNOWN";
+          const searchMeta = (fullPageTitle + " " + displayLabel).toLowerCase();
+          if (searchMeta.includes('bluray') || searchMeta.includes('brrip')) type = "BluRay";
+          else if (searchMeta.includes('web-dl') || searchMeta.includes('webdl')) type = "WEB-DL";
+          else if (searchMeta.includes('webrip')) type = "WEBRip";
+          else if (searchMeta.includes('hdrip')) type = "HDRip";
+          else if (searchMeta.includes('dvdrip')) type = "DVDRip";
+
           rawStreams.push({
-            title: finalTitle,
-            url: streamurl
+            baseTitle: movieName,
+            year: yearStr,
+            language: langStr,
+            seasonCode,
+            episodeCode,
+            type,
+            url: streamurl,
+            label: displayLabel,
+            matchTitle: match.title // Use original match title for better size/quality parsing
           });
         });
 
@@ -616,19 +663,21 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         const directStreams = [];
         for (const stream of limitedStreams) {
           try {
-            const variants = await Promise.race([
+            const result = await Promise.race([
               extractDirectStream(stream.url),
               new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Extraction timeout after 5 seconds')), 5000)
               )
             ]);
 
-            if (variants && variants.length > 0) {
-              for (const variant of variants) {
+            if (result && result.variants && result.variants.length > 0) {
+              const audioInfo = result.audios.length > 0 ? result.audios.join(', ') : "";
+              for (const variant of result.variants) {
                 directStreams.push({
                   ...stream,
                   url: variant.url,
-                  quality: variant.quality
+                  quality: variant.quality,
+                  audioInfo: audioInfo
                 });
               }
             }
@@ -698,17 +747,36 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
       }
     }
 
-    return allValidStreams.map((s) => ({
-      name: "Tamilblasters",
-      title: s.title,
-      url: s.url,
-      quality: s.quality || "Unknown",
-      headers: {
-        "Referer": MAIN_URL,
-        "User-Agent": HEADERS["User-Agent"]
-      },
-      provider: 'Tamilblasters'
-    }));
+    return allValidStreams.map((s) => {
+      const quality = s.quality || "Unknown";
+
+      // Parse size if available in the matchTitle matching this quality
+      let size = "UNKNOWN";
+      if (s.matchTitle && quality !== "Unknown") {
+        // Look for patterns like "1080p [3.7GB]" or "720p (1.2GB)"
+        const qualityPattern = new RegExp(`${quality}\\s*[\\[\\(]([^\\]\\)]+)[\\]\\)]`, 'i');
+        const sizeMatch = s.matchTitle.match(qualityPattern);
+        if (sizeMatch) size = sizeMatch[1].toUpperCase();
+      }
+
+      const streamObj = {
+        ...s,
+        quality,
+        size
+      };
+
+      return {
+        name: "Tamilblasters",
+        title: formatStreamTitle(mediaInfo, streamObj),
+        url: s.url,
+        quality: streamObj.quality,
+        headers: {
+          "Referer": MAIN_URL,
+          "User-Agent": HEADERS["User-Agent"]
+        },
+        provider: 'Tamilblasters'
+      };
+    });
 
   } catch (error) {
     console.error("[Tamilblasters] getStreams failed:", error.message);

@@ -40,6 +40,16 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
 }
 
 /**
+ * Converts string to Title Case
+ * @param {string} str 
+ * @returns {string}
+ */
+function toTitleCase(str) {
+    if (!str) return '';
+    return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+}
+
+/**
  * Normalizes title for comparison
  * @param {string} title 
  * @returns {string}
@@ -127,6 +137,59 @@ function findBestTitleMatch(mediaInfo, searchResults) {
     return null;
 }
 
+function formatStreamTitle(mediaInfo, stream) {
+    const quality = stream.quality || "Unknown";
+    const title = mediaInfo.title || "Unknown";
+
+    // Extract year from mediaInfo or search in title/text
+    let year = mediaInfo.year || "";
+    if (!year || year === "N/A") {
+        const yearMatch = (title + " " + (stream.text || "")).match(/\b(19|20)\d{2}\b/);
+        if (yearMatch) year = yearMatch[0];
+    }
+
+    const audioInfo = stream.audioInfo || "";
+
+    // Extract size from text if available
+    let size = "UNKNOWN";
+    const sizeMatch = stream.text ? stream.text.match(/(\d+(?:\.\d+)?\s*(?:GB|MB))/i) : null;
+    if (sizeMatch) size = sizeMatch[1].toUpperCase();
+
+    // Determine type from text or URL
+    let type = "UNKNOWN";
+    const searchString = ((stream.text || "") + " " + (stream.url || "") + " " + (stream.label || "")).toLowerCase();
+
+    if (searchString.includes('bluray') || searchString.includes('brrip')) type = "BluRay";
+    else if (searchString.includes('web-dl')) type = "WEB-DL";
+    else if (searchString.includes('webrip')) type = "WEBRip";
+    else if (searchString.includes('hdrip')) type = "HDRip";
+    else if (searchString.includes('dvdrip')) type = "DVDRip";
+    else if (searchString.includes('bdrip')) type = "BDRip";
+    else if (searchString.includes('hdtv')) type = "HDTV";
+
+    const yearStr = year ? ` (${year})` : "";
+
+    // Determine language - handle multi-audio and specific language display
+    let lang = "UNKNOWN";
+    if (audioInfo) {
+        const multiMatch = audioInfo.match(/\[Multi Audio: (.*?)\]/i);
+        if (multiMatch) {
+            lang = multiMatch[1].toUpperCase();
+        } else if (audioInfo.toLowerCase().includes('tamil')) {
+            lang = 'TAMIL';
+        } else {
+            lang = audioInfo.toUpperCase();
+        }
+    }
+
+    const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
+    const sizeLine = (size && size !== "UNKNOWN") ? `💾: ${size} | 🚜: movies4u\n` : "";
+
+    return `Movies4u (Instant) (${quality})
+${typeLine}📼: ${title}${yearStr} - ${quality}
+${sizeLine}🌐: ${lang}`;
+}
+
 // =================================================================================
 // DEOBFUSCATION
 // =================================================================================
@@ -157,6 +220,7 @@ async function resolveHlsPlaylist(masterUrl) {
     };
 
     try {
+        console.log(`[Movies4u] Resolving HLS playlist: ${masterUrl}`);
         const response = await fetchWithTimeout(masterUrl, {
             headers: {
                 ...HEADERS,
@@ -169,12 +233,30 @@ async function resolveHlsPlaylist(masterUrl) {
         const content = await response.text();
         if (!content.includes('#EXTM3U')) return result;
 
-        result.isMaster = true;
+        // Skip audio-only master playlists that don't have video variants
+        if (content.includes('#EXT-X-STREAM-INF')) {
+            result.isMaster = true;
+        } else if (content.includes('#EXT-X-MEDIA:TYPE=AUDIO') && !content.includes('#EXT-X-STREAM-INF')) {
+            console.log(`[Movies4u] Found audio-only playlist, skipping resolution`);
+            return result;
+        }
 
         // Parse audio tracks (#EXT-X-MEDIA:TYPE=AUDIO)
-        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"/g);
+        // #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="हिन्दी",LANGUAGE="hi",CHANNELS="2",...
+        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"(?:.*?CHANNELS="([^"]+)")?/g);
         for (const match of audioMatches) {
-            result.audios.push(match[1]);
+            let audioName = match[1];
+            const channels = match[2];
+
+            if (channels) {
+                const channelMap = { "1": "1.0", "2": "2.0", "6": "5.1", "8": "7.1" };
+                const channelStr = channelMap[channels] || channels;
+                audioName += ` (${channelStr})`;
+            }
+
+            if (!result.audios.includes(audioName)) {
+                result.audios.push(audioName);
+            }
         }
 
         // Look for variant playlists (#EXT-X-STREAM-INF)
@@ -182,8 +264,10 @@ async function resolveHlsPlaylist(masterUrl) {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             if (line.includes('#EXT-X-STREAM-INF')) {
-                // Extract resolution
+                // Extract quality from line
                 let quality = "Unknown";
+
+                // 1. Try RESOLUTION tag
                 const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
                 if (resMatch) {
                     const height = parseInt(resMatch[2]);
@@ -194,26 +278,39 @@ async function resolveHlsPlaylist(masterUrl) {
                     else quality = `${height}p`;
                 }
 
-                // Get URL from next line
-                if (i + 1 < lines.length) {
-                    let variantPath = lines[i + 1].trim();
-                    if (variantPath && !variantPath.startsWith('#')) {
+                // 2. Try NAME tag if resolution fails or as a supplement
+                if (quality === "Unknown") {
+                    const nameMatch = line.match(/NAME="([^"]+)"/i);
+                    if (nameMatch) quality = nameMatch[1];
+                }
+
+                // Find next non-empty, non-tag line which should be the URL
+                let j = i + 1;
+                while (j < lines.length && (lines[j].trim().startsWith('#') || !lines[j].trim())) {
+                    j++;
+                }
+
+                if (j < lines.length) {
+                    let variantPath = lines[j].trim();
+                    if (variantPath) {
                         let variantUrl = variantPath;
                         if (!variantUrl.startsWith('http')) {
                             const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
                             variantUrl = baseUrl + variantUrl;
                         }
-                        result.variants.push({ url: variantUrl, quality });
+
+                        // Check for duplicates
+                        if (!result.variants.some(v => v.url === variantUrl)) {
+                            result.variants.push({ url: variantUrl, quality });
+                        }
                     }
                 }
+                // Skip the lines we've processed
+                i = j;
             }
         }
 
-        // If no variants found but it's a valid m3u8, return the original URL as a single variant
-        if (result.variants.length === 0) {
-            result.variants.push({ url: masterUrl, quality: "Unknown" });
-        }
-
+        console.log(`[Movies4u] HLS Summary: ${result.variants.length} qualities, ${result.audios.length} audios`);
         return result;
     } catch (error) {
         console.error(`[Movies4u] HLS resolution error: ${error.message}`);
@@ -464,6 +561,7 @@ async function getTMDBDetails(tmdbId, mediaType) {
     }
 }
 
+
 /**
  * Searches movies4u.fans for a movie
  * @param {string} query Search query
@@ -551,6 +649,24 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
         console.log(`[Movies4u] Found match: ${bestMatch.title}`);
 
+        // Refine mediaInfo from bestMatch if TMDB info is less specific or missing
+        const titleParts = bestMatch.title.split('(');
+        const siteTitle = titleParts[0].trim();
+        const yearMatch = bestMatch.title.match(/\((20\d{2}|19\d{2})\)/);
+
+        // Update title and year if they are currently just the search query or incorrect
+        if (mediaInfo.title.toLowerCase() === tmdbId.toLowerCase() || mediaInfo.title === mediaInfo.title.toLowerCase()) {
+            mediaInfo.title = siteTitle;
+            if (yearMatch) mediaInfo.year = yearMatch[1];
+        } else if (!mediaInfo.year && yearMatch) {
+            mediaInfo.year = yearMatch[1];
+        }
+
+        // Ensure title isn't lowercase
+        if (mediaInfo.title === mediaInfo.title.toLowerCase()) {
+            mediaInfo.title = toTitleCase(mediaInfo.title);
+        }
+
         // Extract watch links from movie page
         const watchLinks = await extractWatchLinks(bestMatch.url);
 
@@ -569,13 +685,17 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                 const cleanTitle = bestMatch.title.split("(")[0].trim();
 
                 for (const result of extractionResults) {
-                    const displayTitle = result.audioInfo ? `${cleanTitle}${result.audioInfo}` : cleanTitle;
+                    const streamObj = {
+                        ...result,
+                        quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
+                        text: watchLink.label
+                    };
 
                     streams.push({
                         name: "Movies4u",
-                        title: displayTitle,
+                        title: formatStreamTitle(mediaInfo, streamObj),
                         url: result.url,
-                        quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
+                        quality: streamObj.quality,
                         headers: {
                             "Referer": M4UPLAY_BASE,
                             "User-Agent": HEADERS["User-Agent"]

@@ -63,31 +63,37 @@ function unpack(p, a, c, k) {
     return p;
 }
 
+/**
+ * Converts string to Title Case
+ */
+function toTitleCase(str) {
+    if (!str) return '';
+    return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+}
+
+/**
+ * Formats the stream title according to the premium standard
+ */
+function formatStreamTitle(mediaInfo, stream) {
+    const { title, year } = mediaInfo;
+    const { quality, label } = stream;
+
+    const yearStr = year ? ` (${year})` : "";
+
+    const tapeLine = `📼: ${title}${yearStr}`;
+    const providerLine = `🚜: tamilian`;
+
+    return `Tamilian (Direct) (${quality})
+${tapeLine}
+${providerLine} | 🌐: MULTI`;
+}
+
 // =================================================================================
 // EMBEDOJO EXTRACTOR (Reference Implementation Port)
 // =================================================================================
 
-async function extractFromEmbedojoDirect(tmdbId, originalLanguage = null) {
-    const categories = ['tamil'];
-    if (originalLanguage && originalLanguage !== 'ta') {
-        const langMap = {
-            'en': 'english',
-            'hi': 'hindi',
-            'te': 'telugu',
-            'ml': 'malayalam',
-            'kn': 'kannada'
-        };
-        const mappedCat = langMap[originalLanguage];
-        if (mappedCat && !categories.includes(mappedCat)) {
-            categories.push(mappedCat);
-        }
-    }
-
-    // Always fall back to other common ones if not already included
-    const extraCats = ['english', 'hindi', 'telugu'];
-    for (const cat of extraCats) {
-        if (!categories.includes(cat)) categories.push(cat);
-    }
+async function extractFromEmbedojoDirect(tmdbId) {
+    const categories = ['tamil', 'english', 'hindi', 'telugu', 'malayalam', 'kannada', 'dubbed'];
 
     console.log(`[Tamilian] Attempting direct Embedojo extraction for TMDB ID: ${tmdbId} (Categories: ${categories.join(', ')})`);
 
@@ -266,7 +272,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
         // Direct Embedojo Extraction (Best for Movies)
         if (mediaInfo.tmdbId) {
-            const directStream = await extractFromEmbedojoDirect(mediaInfo.tmdbId, mediaInfo.originalLanguage);
+            const directStream = await extractFromEmbedojoDirect(mediaInfo.tmdbId);
             if (directStream) {
                 validStreams.push({
                     title: `${mediaInfo.title} (${mediaInfo.year}) - 1080p`,
@@ -279,7 +285,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
         return validStreams.map((s) => ({
             name: "Tamilian",
-            title: s.title,
+            title: formatStreamTitle(mediaInfo, s),
             url: s.url,
             quality: s.quality || "Unknown",
             headers: {

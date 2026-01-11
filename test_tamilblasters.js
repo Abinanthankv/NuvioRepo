@@ -13,7 +13,11 @@ async function test() {
         const streams = await getStreams(query, mediaType, season, episode);
         console.log("\n--- Results ---");
         if (streams && streams.length > 0) {
-            console.log(JSON.stringify(streams, null, 2));
+            streams.forEach((stream, index) => {
+                console.log(`\nStream ${index + 1}:`);
+                console.log(stream.title);
+                console.log(`URL: ${stream.url.substring(0, 100)}...`);
+            });
             console.log(`\n✅ Success: Found ${streams.length} streams.`);
         } else {
             console.log("\n❌ Failure: No streams found. Check the search query or provider logic.");

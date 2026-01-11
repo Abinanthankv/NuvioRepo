@@ -149,27 +149,50 @@ function findBestTitleMatch(mediaInfo, searchResults) {
 function formatStreamTitle(mediaInfo, stream) {
     const quality = stream.quality || "Unknown";
     const title = mediaInfo.title || "Unknown";
-    const year = mediaInfo.year || "N/A";
+    const year = mediaInfo.year || "";
 
     // Extract size from text if available (e.g., "(1.2 GB)")
-    let size = "Unknown";
+    let size = "";
     const sizeMatch = stream.text ? stream.text.match(/(\d+(?:\.\d+)?\s*(?:GB|MB))/i) : null;
     if (sizeMatch) size = sizeMatch[1];
 
-    // Determine type - default to WEB-DL for Moviesda
-    let type = "WEB-DL";
-    if (stream.text) {
-        if (stream.text.toLowerCase().includes('bluray')) type = "BluRay";
-        else if (stream.text.toLowerCase().includes('hdrip')) type = "HDRip";
-        else if (stream.text.toLowerCase().includes('dvdrip')) type = "DVDRip";
+    // Determine type from text or URL
+    let type = "";
+    const searchString = ((stream.text || "") + " " + (stream.url || "")).toLowerCase();
+
+    if (searchString.includes('bluray') || searchString.includes('brrip')) type = "BluRay";
+    else if (searchString.includes('web-dl')) type = "WEB-DL";
+    else if (searchString.includes('webrip')) type = "WEBRip";
+    else if (searchString.includes('hdrip')) type = "HDRip";
+    else if (searchString.includes('dvdrip')) type = "DVDRip";
+    else if (searchString.includes('bdrip')) type = "BDRip";
+    else if (searchString.includes('hdtv')) type = "HDTV";
+
+    const typeLine = type ? `📹: ${type}\n` : "";
+    const sizeLine = size ? `💾: ${size} | 🚜: moviesda\n` : "";
+    const yearStr = year && year !== "N/A" ? ` ${year}` : "";
+
+    const langMarkers = {
+        'TAMIL': /tamil/i,
+        'HINDI': /hindi/i,
+        'TELUGU': /telugu/i,
+        'MALAYALAM': /malayalam/i,
+        'KANNADA': /kannada/i,
+        'ENGLISH': /english|eng/i,
+        'MULTI AUDIO': /multi/i
+    };
+
+    let language = "TAMIL"; // Default for Moviesda
+    for (const [name, regex] of Object.entries(langMarkers)) {
+        if (regex.test(searchString)) {
+            language = name;
+            break;
+        }
     }
 
     return `Moviesda (Instant) (${quality})
-📺: ${type}
-📼: ${title} (${year}) - ${quality}
-💾: ${size} | 🚜: moviesda
-🌐: TAMIL
-📦: Direct | 🌱: N/A`;
+${typeLine}📼: ${title}${yearStr} ${quality}
+${sizeLine}🌐: ${language}`;
 }
 
 // =================================================================================
