@@ -24,7 +24,7 @@
       "id": "tamilblasters",
       "name": "Tamilblasters",
       "description": "Tamilblasters provider for Nuvio. Uses search-based forum scraping.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
         "movie",
@@ -76,7 +76,7 @@
       "id": "movies4u",
       "name": "Movies4u",
       "description": "Movies4u provider for Nuvio. Features Packer deobfuscation and HLS master resolution.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
         "movie"

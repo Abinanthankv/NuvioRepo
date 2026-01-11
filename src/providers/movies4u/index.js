@@ -145,13 +145,13 @@ function unpack(p, a, c, k) {
 }
 
 /**
- * Resolves a master HLS playlist to get the first variant stream and audio info
+ * Resolves a master HLS playlist to get all variant streams and audio info
  * @param {string} masterUrl The master playlist URL
- * @returns {Promise<Object>} Object containing resolved URL and audio tracks
+ * @returns {Promise<Object>} Object containing variants and audio tracks
  */
 async function resolveHlsPlaylist(masterUrl) {
     const result = {
-        url: masterUrl,
+        variants: [], // {url, quality}
         audios: [],
         isMaster: false
     };
@@ -180,19 +180,38 @@ async function resolveHlsPlaylist(masterUrl) {
         // Look for variant playlists (#EXT-X-STREAM-INF)
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes('#EXT-X-STREAM-INF') && i + 1 < lines.length) {
-                let variantPath = lines[i + 1].trim();
-                if (variantPath && !variantPath.startsWith('#')) {
-                    // Resolve relative path
-                    if (!variantPath.startsWith('http')) {
-                        const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
-                        result.url = baseUrl + variantPath;
-                    } else {
-                        result.url = variantPath;
+            const line = lines[i].trim();
+            if (line.includes('#EXT-X-STREAM-INF')) {
+                // Extract resolution
+                let quality = "Unknown";
+                const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+                if (resMatch) {
+                    const height = parseInt(resMatch[2]);
+                    if (height >= 2160) quality = "4K";
+                    else if (height >= 1080) quality = "1080p";
+                    else if (height >= 720) quality = "720p";
+                    else if (height >= 480) quality = "480p";
+                    else quality = `${height}p`;
+                }
+
+                // Get URL from next line
+                if (i + 1 < lines.length) {
+                    let variantPath = lines[i + 1].trim();
+                    if (variantPath && !variantPath.startsWith('#')) {
+                        let variantUrl = variantPath;
+                        if (!variantUrl.startsWith('http')) {
+                            const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
+                            variantUrl = baseUrl + variantUrl;
+                        }
+                        result.variants.push({ url: variantUrl, quality });
                     }
-                    break; // Just get the first one for now
                 }
             }
+        }
+
+        // If no variants found but it's a valid m3u8, return the original URL as a single variant
+        if (result.variants.length === 0) {
+            result.variants.push({ url: masterUrl, quality: "Unknown" });
         }
 
         return result;
@@ -326,7 +345,7 @@ async function extractFromM4UPlay(embedUrl) {
         }
 
         if (finalStreamUrl) {
-            // Check if it's a master playlist and resolve to a variant if so
+            // Check if it's a master playlist and resolve to variants if so
             if (finalStreamUrl.includes('master.')) {
                 console.log(`[Movies4u] Resolving master playlist...`);
                 const resolutionResult = await resolveHlsPlaylist(finalStreamUrl);
@@ -336,39 +355,32 @@ async function extractFromM4UPlay(embedUrl) {
                     if (resolutionResult.audios.length > 1) {
                         audioInfo = ` [Multi Audio: ${resolutionResult.audios.join(', ')}]`;
                         console.log(`[Movies4u] Found multi-audio: ${resolutionResult.audios.join(', ')}`);
-                        // For multi-audio, we might want to return the master URL instead of variant 
-                        // so the player can switch, but usually direct variant is preferred if it has embedded audio.
-                        // However, m4uplay multi-audio uses separate playlists, so returning the MASTER is better.
-                        return {
-                            url: finalStreamUrl,
-                            audios: resolutionResult.audios,
-                            audioInfo: audioInfo
-                        };
                     }
 
-                    if (resolutionResult.url !== finalStreamUrl) {
-                        console.log(`[Movies4u] Resolved to variant: ${resolutionResult.url}`);
-                        return {
-                            url: resolutionResult.url,
-                            audios: resolutionResult.audios,
-                            audioInfo: ""
-                        };
-                    }
+                    // Return all variants found
+                    return resolutionResult.variants.map(v => ({
+                        url: v.url,
+                        audios: resolutionResult.audios,
+                        audioInfo: audioInfo,
+                        quality: v.quality
+                    }));
                 }
             }
-            return {
+
+            return [{
                 url: finalStreamUrl,
                 audios: [],
-                audioInfo: ""
-            };
+                audioInfo: "",
+                quality: "Unknown"
+            }];
         }
 
         console.log(`[Movies4u] Could not extract stream URL from m4uplay embed`);
-        return null;
+        return [];
 
     } catch (error) {
         console.error(`[Movies4u] M4UPlay extraction error: ${error.message}`);
-        return null;
+        return [];
     }
 }
 
@@ -551,23 +563,26 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         const streams = [];
 
         for (const watchLink of watchLinks) {
-            const extractionResult = await extractFromM4UPlay(watchLink.url);
+            const extractionResults = await extractFromM4UPlay(watchLink.url);
 
-            if (extractionResult && extractionResult.url) {
+            if (extractionResults && extractionResults.length > 0) {
                 const cleanTitle = bestMatch.title.split("(")[0].trim();
-                const displayTitle = extractionResult.audioInfo ? `${cleanTitle}${extractionResult.audioInfo}` : cleanTitle;
 
-                streams.push({
-                    name: "Movies4u",
-                    title: displayTitle,
-                    url: extractionResult.url,
-                    quality: watchLink.quality,
-                    headers: {
-                        "Referer": M4UPLAY_BASE,
-                        "User-Agent": HEADERS["User-Agent"]
-                    },
-                    provider: 'Movies4u'
-                });
+                for (const result of extractionResults) {
+                    const displayTitle = result.audioInfo ? `${cleanTitle}${result.audioInfo}` : cleanTitle;
+
+                    streams.push({
+                        name: "Movies4u",
+                        title: displayTitle,
+                        url: result.url,
+                        quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
+                        headers: {
+                            "Referer": M4UPLAY_BASE,
+                            "User-Agent": HEADERS["User-Agent"]
+                        },
+                        provider: 'Movies4u'
+                    });
+                }
             }
         }
 

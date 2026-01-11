@@ -223,9 +223,10 @@ async function search(query) {
 // =================================================================================
 
 /**
- * Detects quality from m3u8 stream manifest
+ * Detects quality variants from m3u8 stream manifest
+ * If it's a master playlist, it returns all variants.
  * @param {string} m3u8Url The m3u8 URL
- * @returns {Promise<string>} Quality string or "Unknown"
+ * @returns {Promise<Array<{url: string, quality: string}>>} Array of video variants
  */
 async function detectQualityFromM3U8(m3u8Url) {
   try {
@@ -237,37 +238,73 @@ async function detectQualityFromM3U8(m3u8Url) {
     }, 5000);
     const content = await response.text();
 
-    // Look for resolution in EXT-X-STREAM-INF tags
-    // Example: #EXT-X-STREAM-INF:RESOLUTION=1920x1080
-    const resolutionMatch = content.match(/RESOLUTION=(\d+)x(\d+)/i);
-    if (resolutionMatch) {
-      const height = parseInt(resolutionMatch[2]);
-      if (height >= 2160) return "4K";
-      if (height >= 1080) return "1080p";
-      if (height >= 720) return "720p";
-      if (height >= 480) return "480p";
-      return `${height}p`;
+    if (!content.includes('#EXTM3U')) {
+      return [{ url: m3u8Url, quality: "Unknown" }];
     }
 
-    // Look for quality indicators in variant names
+    const variants = [];
+
+    // Check if it's a master playlist with multiple streams
+    if (content.includes('#EXT-X-STREAM-INF')) {
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('#EXT-X-STREAM-INF')) {
+          // Extract resolution
+          let quality = "Unknown";
+          const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+          if (resMatch) {
+            const height = parseInt(resMatch[2]);
+            if (height >= 2160) quality = "4K";
+            else if (height >= 1080) quality = "1080p";
+            else if (height >= 720) quality = "720p";
+            else if (height >= 480) quality = "480p";
+            else quality = `${height}p`;
+          }
+
+          // Next line should be the URL
+          if (i + 1 < lines.length) {
+            let variantUrl = lines[i + 1].trim();
+            if (variantUrl && !variantUrl.startsWith('#')) {
+              // Resolve relative URL
+              if (!variantUrl.startsWith('http')) {
+                const baseUrl = m3u8Url.substring(0, m3u8Url.lastIndexOf('/') + 1);
+                variantUrl = baseUrl + variantUrl;
+              }
+              variants.push({ url: variantUrl, quality });
+            }
+          }
+        }
+      }
+    }
+
+    if (variants.length > 0) {
+      // Sort variants by quality (best first)
+      const qualityWeights = { "4K": 2160, "1080p": 1080, "720p": 720, "480p": 480, "Unknown": 0 };
+      variants.sort((a, b) => {
+        const weightA = qualityWeights[a.quality] || parseInt(a.quality) || 0;
+        const weightB = qualityWeights[b.quality] || parseInt(b.quality) || 0;
+        return weightB - weightA;
+      });
+      return variants;
+    }
+
+    // Fallback for single variant m3u8
     const qualityMatch = content.match(/\b(2160p|1080p|720p|480p|4K|UHD|HD)\b/i);
-    if (qualityMatch) {
-      return qualityMatch[0];
-    }
+    const quality = qualityMatch ? qualityMatch[0] : "Unknown";
 
-    return "Unknown";
+    return [{ url: m3u8Url, quality }];
   } catch (error) {
     console.error(`[Tamilblasters] Error detecting quality from m3u8: ${error.message}`);
-    return "Unknown";
+    return [{ url: m3u8Url, quality: "Unknown" }];
   }
 }
 
 /**
- * Attempts to extract direct stream URL from various embed hosts
+ * Attempts to extract direct stream URLs from various embed hosts
  * @param {string} embedUrl The embed URL
- * @returns {Promise<string|null>} Direct stream URL or null
+ * @returns {Promise<Array<{url: string, quality: string}>>} Array of stream variants
  */
-
 async function extractDirectStream(embedUrl) {
   try {
     console.log(`[Tamilblasters] Embed URL: ${embedUrl}`);
@@ -281,7 +318,7 @@ async function extractDirectStream(embedUrl) {
 
   } catch (error) {
     console.error(`[Tamilblasters] Extraction error: ${error.message}`);
-    return null;
+    return [];
   }
 }
 
@@ -289,7 +326,7 @@ async function extractDirectStream(embedUrl) {
  * Generic extractor that looks for common video source patterns
  * @param {string} embedUrl The embed URL
  * @param {string} hostName Host identifier for logging
- * @returns {Promise<string|null>} Direct stream URL or null if not found
+ * @returns {Promise<Array<{url: string, quality: string}>>} Array of stream variants
  */
 async function extractFromGenericEmbed(embedUrl, hostName) {
   try {
@@ -302,132 +339,86 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
     }, 5000);
     let html = await response.text();
 
-    // Check if it's a landing page (common for hglink and clones)
+    // Check if it's a landing page
     if (html.includes('<title>Loading...</title>') || html.includes('Page is loading')) {
       console.log(`[Tamilblasters] Detected landing page on ${hostName}, trying mirrors...`);
-      // Only try the most reliable mirrors to save time
       const mirrors = ['yuguaab.com', 'cavanhabg.com'];
       for (const mirror of mirrors) {
         if (hostName.includes(mirror)) continue;
         const mirrorUrl = embedUrl.replace(hostName, mirror);
-        console.log(`[Tamilblasters] Trying mirror: ${mirrorUrl}`);
         try {
           const mirrorRes = await fetchWithTimeout(mirrorUrl, { headers: { ...HEADERS, 'Referer': MAIN_URL } }, 3000);
           const mirrorHtml = await mirrorRes.text();
           if (mirrorHtml.includes('jwplayer') || mirrorHtml.includes('sources') || mirrorHtml.includes('eval(function(p,a,c,k,e,d)')) {
-            console.log(`[Tamilblasters] Successfully reached player on mirror: ${mirror}`);
             html = mirrorHtml;
             break;
           }
-        } catch (e) {
-          console.log(`[Tamilblasters] Mirror ${mirror} failed: ${e.message}`);
-        }
+        } catch (e) { }
       }
     }
 
-    // Check for Packer obfuscation: eval(function(p,a,c,k,e,d){...}(p,a,c,k,e,d))
+    // Check for Packer obfuscation
     const packerMatch = html.match(/eval\(function\(p,a,c,k,e,d\)\{.*?\}\s*\((.*)\)\s*\)/s);
     if (packerMatch) {
-      console.log(`[Tamilblasters] Detected Packer obfuscation on ${hostName}, unpacking...`);
       const rawArgs = packerMatch[1].trim();
       const pMatch = rawArgs.match(/^'(.*)',\s*(\d+),\s*(\d+),\s*'(.*?)'\.split\(/s);
-
       if (pMatch) {
         const unpacked = unpack(pMatch[1], parseInt(pMatch[2]), parseInt(pMatch[3]), pMatch[4].split('|'));
-        html += "\n" + unpacked; // Append unpacked code to HTML for existing pattern matching
+        html += "\n" + unpacked;
       }
     }
 
     // Common patterns for video sources
     const patterns = [
-      // StreamHG/hglink specific: "hls4":"/stream/..."
       /["']hls[2-4]["']\s*:\s*["']([^"']+)["']/gi,
-      // Vidnest specific: sources: [{file:"URL",label:"..."}]
       /sources\s*:\s*\[\s*{\s*file\s*:\s*["']([^"']+)["']/gi,
-      // Look for .m3u8 URLs (absolute)
       /https?:\/\/[^\s"']+\.m3u8[^\s"']*/gi,
-      // Look for .m3u8 URLs (relative/path-only)
       /["'](\/[^\s"']+\.m3u8[^\s"']*)["']/gi,
-      // Look for .mp4 URLs
-      /https?:\/\/[^\s"']+\.mp4[^\s"']*/gi,
-      // Look for source: or file: patterns
-      /(?:source|file|src)\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/gi,
     ];
 
     const allFoundUrls = [];
     for (const pattern of patterns) {
       const matches = html.match(pattern);
-      if (matches && matches.length > 0) {
+      if (matches) {
         for (let match of matches) {
-          // Extract the actual URL part from the match
           let videoUrl = match;
-
-          // Case 1: Key-value pair like "hls4":"/..."
           const kvMatch = match.match(/["']:[ ]*["']([^"']+)["']/);
-          if (kvMatch) {
-            videoUrl = kvMatch[1];
-          } else {
-            // Case 2: Just the URL in quotes
+          if (kvMatch) videoUrl = kvMatch[1];
+          else {
             const quoteMatch = match.match(/["']([^"']+)["']/);
-            if (quoteMatch) {
-              videoUrl = quoteMatch[1];
-            }
+            if (quoteMatch) videoUrl = quoteMatch[1];
           }
-
-          // Case 3: Absolute URL (no quotes)
           const absUrlMatch = videoUrl.match(/https?:\/\/[^\s"']+/);
-          if (absUrlMatch) {
-            videoUrl = absUrlMatch[0];
-          }
-
-          // Clean up
+          if (absUrlMatch) videoUrl = absUrlMatch[0];
           videoUrl = videoUrl.replace(/[\\"'\)\]]+$/, '');
-
-          // Skip useless matches
-          if (!videoUrl || videoUrl.length < 5 || videoUrl.includes('google.com') || videoUrl.includes('youtube.com')) {
-            continue;
-          }
-
-          // Resolve relative URLs
-          if (videoUrl.startsWith('/') && !videoUrl.startsWith('//')) {
-            videoUrl = embedBase + videoUrl;
-          }
-
+          if (!videoUrl || videoUrl.length < 5 || videoUrl.includes('google.com') || videoUrl.includes('youtube.com')) continue;
+          if (videoUrl.startsWith('/') && !videoUrl.startsWith('//')) videoUrl = embedBase + videoUrl;
           allFoundUrls.push(videoUrl);
         }
       }
     }
 
     if (allFoundUrls.length > 0) {
-      // Prioritization logic
-      // 1. URLs with query parameters (e.g., ?t=...)
-      // 2. .m3u8 extension
-      // 3. Shorter URLs (often cleaner)
-
+      // Prioritize .m3u8 and URLs with params
       allFoundUrls.sort((a, b) => {
         const hasParamA = a.includes('?');
         const hasParamB = b.includes('?');
         if (hasParamA !== hasParamB) return hasParamB ? 1 : -1;
-
         const isM3U8A = a.toLowerCase().includes('.m3u8');
         const isM3U8B = b.toLowerCase().includes('.m3u8');
         if (isM3U8A !== isM3U8B) return isM3U8B ? 1 : -1;
-
         return a.length - b.length;
       });
 
       const bestUrl = allFoundUrls[0];
-      console.log(`[Tamilblasters] Selected best direct URL from ${hostName}: ${bestUrl}`);
-      return bestUrl;
+      console.log(`[Tamilblasters] Detected best URL: ${bestUrl}. Resolving quality...`);
+      return await detectQualityFromM3U8(bestUrl);
     }
 
-    // If no direct URL found, return null (don't show embed URL)
-    console.log(`[Tamilblasters] No direct URL found in ${hostName}, skipping`);
-    return null;
-
+    return [];
   } catch (error) {
     console.error(`[Tamilblasters] Error extracting from ${hostName}: ${error.message}`);
-    return null;
+    return [];
   }
 }
 
@@ -622,35 +613,32 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         }
         console.log(`[Tamilblasters] Extracting direct streams from ${limitedStreams.length} embed URLs for "${match.title}"...`);
 
-        const directStreams = await Promise.all(
-          limitedStreams.map(async (stream) => {
-            try {
-              // Add 5-second timeout for each embed extraction
-              const directUrl = await Promise.race([
-                extractDirectStream(stream.url),
-                new Promise((_, reject) =>
-                  setTimeout(() => reject(new Error('Extraction timeout after 5 seconds')), 5000)
-                )
-              ]);
+        const directStreams = [];
+        for (const stream of limitedStreams) {
+          try {
+            const variants = await Promise.race([
+              extractDirectStream(stream.url),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Extraction timeout after 5 seconds')), 5000)
+              )
+            ]);
 
-              if (!directUrl) {
-                return null; // Mark for filtering
+            if (variants && variants.length > 0) {
+              for (const variant of variants) {
+                directStreams.push({
+                  ...stream,
+                  url: variant.url,
+                  quality: variant.quality
+                });
               }
-
-              return {
-                ...stream,
-                url: directUrl,
-                quality: "Unknown" // Skip quality detection for performance
-              };
-            } catch (error) {
-              console.error(`[Tamilblasters] Failed to extract stream: ${error.message}`);
-              return null;
             }
-          })
-        );
+          } catch (error) {
+            console.error(`[Tamilblasters] Failed to extract stream: ${error.message}`);
+          }
+        }
 
-        // Filter out null entries (failed extractions)
-        let validStreams = directStreams.filter(s => s !== null);
+        // Filter out null entries (already handled by loop)
+        let validStreams = directStreams;
 
         // Filter by season and episode if provided OR if we detect TV show patterns
 
