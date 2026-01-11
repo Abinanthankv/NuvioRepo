@@ -140,6 +140,38 @@ function findBestTitleMatch(mediaInfo, searchResults) {
     return null;
 }
 
+/**
+ * Formats a rich multi-line title for a stream
+ * @param {Object} mediaInfo 
+ * @param {Object} stream 
+ * @returns {string}
+ */
+function formatStreamTitle(mediaInfo, stream) {
+    const quality = stream.quality || "Unknown";
+    const title = mediaInfo.title || "Unknown";
+    const year = mediaInfo.year || "N/A";
+
+    // Extract size from text if available (e.g., "(1.2 GB)")
+    let size = "Unknown";
+    const sizeMatch = stream.text ? stream.text.match(/(\d+(?:\.\d+)?\s*(?:GB|MB))/i) : null;
+    if (sizeMatch) size = sizeMatch[1];
+
+    // Determine type - default to WEB-DL for Moviesda
+    let type = "WEB-DL";
+    if (stream.text) {
+        if (stream.text.toLowerCase().includes('bluray')) type = "BluRay";
+        else if (stream.text.toLowerCase().includes('hdrip')) type = "HDRip";
+        else if (stream.text.toLowerCase().includes('dvdrip')) type = "DVDRip";
+    }
+
+    return `Moviesda (Instant) (${quality})
+📺: ${type}
+📼: ${title} (${year}) - ${quality}
+💾: ${size} | 🚜: moviesda
+🌐: TAMIL
+📦: Direct | 🌱: N/A`;
+}
+
 // =================================================================================
 // CORE FUNCTIONS
 // =================================================================================
@@ -524,6 +556,10 @@ async function parseMoviePage(url) {
             // Parse each quality page
             for (const qualityLink of qualityLinks) {
                 const qualityStreams = await parseQualityPage(qualityLink.url, qualityLink.quality);
+                // Attach parent text for context if possible
+                qualityStreams.forEach(s => {
+                    if (!s.text) s.text = qualityLink.text || "";
+                });
                 streams.push(...qualityStreams);
             }
             return streams;
@@ -634,7 +670,8 @@ async function parseQualityPage(url, quality) {
                 streams.push({
                     url: fullUrl,
                     quality: quality,
-                    type: "download"
+                    type: "download",
+                    text: text // Keep text for size extraction
                 });
             }
         });
@@ -831,7 +868,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
                                     finalStreams.push({
                                         name: "Moviesda",
-                                        title: `${mediaInfo.title} (${mediaInfo.year || 'N/A'}) - ${stream.quality}`,
+                                        title: formatStreamTitle(mediaInfo, stream),
                                         url: finalUrl,
                                         quality: stream.quality || "Unknown",
                                         headers: {
@@ -943,7 +980,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
             finalStreams.push({
                 name: "Moviesda",
-                title: `${mediaInfo.title} (${mediaInfo.year || 'N/A'}) - ${stream.quality}`,
+                title: formatStreamTitle(mediaInfo, stream),
                 url: finalUrl,
                 quality: stream.quality,
                 headers: {
