@@ -172,10 +172,18 @@ function formatStreamTitle(mediaInfo, stream) {
 
     // Determine language - handle multi-audio and specific language display
     let lang = "UNKNOWN";
-    if (audioInfo) {
+    const selectedAudio = stream.selectedAudio || "";
+
+    if (selectedAudio) {
+        lang = selectedAudio.toUpperCase();
+    } else if (audioInfo) {
         const multiMatch = audioInfo.match(/\[Multi Audio: (.*?)\]/i);
+        const singleMatch = audioInfo.match(/\[Audio: (.*?)\]/i);
+
         if (multiMatch) {
             lang = multiMatch[1].toUpperCase();
+        } else if (singleMatch) {
+            lang = singleMatch[1].toUpperCase();
         } else if (audioInfo.toLowerCase().includes('tamil')) {
             lang = 'TAMIL';
         } else {
@@ -183,10 +191,14 @@ function formatStreamTitle(mediaInfo, stream) {
         }
     }
 
-    // Add multi-audio tag to quality for master playlists
+    // Add specific audio tag for master playlists with selected audio
     let displayQuality = quality;
     if (isMaster) {
-        displayQuality = `${quality} (Multi-Audio)`;
+        if (selectedAudio) {
+            displayQuality = `${quality} (${selectedAudio})`;
+        } else {
+            displayQuality = `${quality} (Multi-Audio)`;
+        }
     }
 
     const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
@@ -239,6 +251,7 @@ async function resolveHlsPlaylist(masterUrl) {
         if (!response.ok) return result;
 
         const content = await response.text();
+
         if (!content.includes('#EXTM3U')) return result;
 
         // Skip audio-only master playlists that don't have video variants
@@ -250,11 +263,18 @@ async function resolveHlsPlaylist(masterUrl) {
         }
 
         // Parse audio tracks (#EXT-X-MEDIA:TYPE=AUDIO)
-        // #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="हिन्दी",LANGUAGE="hi",CHANNELS="2",...
-        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"(?:.*?CHANNELS="([^"]+)")?/g);
+        // #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="हिन्दी",LANGUAGE="hi",CHANNELS="2",URI="index-a1.m3u8..."
+        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO,.*?NAME="([^"]+)"(?:.*?LANGUAGE="([^"]+)")?(?:.*?CHANNELS="([^"]+)")?(?:.*?URI="([^"]+)")?/g);
         for (const match of audioMatches) {
             let audioName = match[1];
-            const channels = match[2];
+            const language = match[2];
+            const channels = match[3];
+            let audioUri = match[4];
+
+            if (audioUri && !audioUri.startsWith('http')) {
+                const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
+                audioUri = baseUrl + audioUri;
+            }
 
             if (channels) {
                 const channelMap = { "1": "1.0", "2": "2.0", "6": "5.1", "8": "7.1" };
@@ -262,8 +282,12 @@ async function resolveHlsPlaylist(masterUrl) {
                 audioName += ` (${channelStr})`;
             }
 
-            if (!result.audios.includes(audioName)) {
-                result.audios.push(audioName);
+            if (!result.audios.some(a => a.name === audioName)) {
+                result.audios.push({
+                    name: audioName,
+                    language: language || 'unknown',
+                    uri: audioUri
+                });
             }
         }
 
@@ -318,7 +342,7 @@ async function resolveHlsPlaylist(masterUrl) {
             }
         }
 
-        console.log(`[Movies4u] HLS Summary: ${result.variants.length} qualities, ${result.audios.length} audios`);
+        console.log(`[Movies4u] HLS Summary: ${result.variants.length} qualities, ${result.audios.length} audios found`);
         return result;
     } catch (error) {
         console.error(`[Movies4u] HLS resolution error: ${error.message}`);
@@ -456,36 +480,66 @@ async function extractFromM4UPlay(embedUrl) {
                 const resolutionResult = await resolveHlsPlaylist(finalStreamUrl);
 
                 if (resolutionResult.isMaster) {
-                    let audioInfo = "";
-                    if (resolutionResult.audios.length > 1) {
-                        audioInfo = ` [Multi Audio: ${resolutionResult.audios.join(', ')}]`;
-                        console.log(`[Movies4u] Found multi-audio: ${resolutionResult.audios.join(', ')}`);
-                    }
-
                     const results = [];
+                    const audioTracks = resolutionResult.audios;
 
-                    // If multi-audio is present, add the master URL as an "AUTO" quality option
-                    // This allows the player to handle BOTH quality switching and audio track selection
-                    if (resolutionResult.audios.length > 1) {
-                        results.push({
-                            url: resolutionResult.masterUrl,
-                            audios: resolutionResult.audios,
-                            audioInfo: audioInfo,
-                            quality: "AUTO",
-                            isMaster: true
+                    // Helper to create a custom master playlist that defaults a specific audio track
+                    const createLanguageMaster = (targetAudioName) => {
+                        let newContent = "#EXTM3U\n";
+
+                        // Add audio tracks, making the target one the default
+                        for (const audio of audioTracks) {
+                            const isTarget = audio.name === targetAudioName;
+                            const defaultTag = isTarget ? 'DEFAULT=YES,AUTOSELECT=YES' : 'DEFAULT=NO,AUTOSELECT=NO';
+                            newContent += `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="${audio.name}",LANGUAGE="${audio.language}",${defaultTag},URI="${audio.uri}"\n`;
+                        }
+
+                        // Add variants
+                        for (const variant of resolutionResult.variants) {
+                            newContent += `#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=${variant.quality.includes('p') ? '1280x' + variant.quality.replace('p', '') : '1280x720'},AUDIO="audio0"\n`;
+                            newContent += `${variant.url}\n`;
+                        }
+
+                        // Convert to data URI
+                        try {
+                            const base64 = typeof Buffer !== 'undefined'
+                                ? Buffer.from(newContent).toString('base64')
+                                : btoa(newContent);
+                            return `data:application/vnd.apple.mpegurl;base64,${base64}`;
+                        } catch (e) {
+                            return resolutionResult.masterUrl; // Fallback
+                        }
+                    };
+
+                    // If multiple audios, create separate entries for each quality-language combination
+                    if (audioTracks.length > 1) {
+                        for (const audio of audioTracks) {
+                            const langMasterUrl = createLanguageMaster(audio.name);
+
+                            for (const variant of resolutionResult.variants) {
+                                results.push({
+                                    url: langMasterUrl,
+                                    audios: audioTracks,
+                                    audioInfo: `[Audio: ${audio.name}]`,
+                                    quality: variant.quality,
+                                    selectedAudio: audio.name,
+                                    isMaster: true
+                                });
+                            }
+                        }
+                    } else {
+                        // Return normal variants if single or no audio info
+                        const audioInfo = audioTracks.length > 0 ? `[Audio: ${audioTracks[0].name}]` : "";
+                        resolutionResult.variants.forEach(v => {
+                            results.push({
+                                url: v.url,
+                                audios: audioTracks,
+                                audioInfo: audioInfo,
+                                quality: v.quality,
+                                isMaster: false
+                            });
                         });
                     }
-
-                    // Add all variants found
-                    resolutionResult.variants.forEach(v => {
-                        results.push({
-                            url: v.url,
-                            audios: resolutionResult.audios,
-                            audioInfo: audioInfo,
-                            quality: v.quality,
-                            isMaster: false
-                        });
-                    });
 
                     return results;
                 }

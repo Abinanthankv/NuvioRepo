@@ -1,8 +1,8 @@
 const { getStreams } = require('./src/providers/movies4u/index.js');
+const fs = require('fs');
 
 async function testExtraction() {
-    // Testing with a movie that is likely to have multiple audios
-    const tmdbId = "eko";
+    const tmdbId = "people we meet";
     const mediaType = 'movie';
 
     console.log(`Testing extraction for TMDB ID: ${tmdbId}...`);
@@ -15,22 +15,25 @@ async function testExtraction() {
             console.log(`\n--- Stream ${index + 1} ---`);
             console.log(`Title: ${stream.title.replace(/\n/g, ' | ')}`);
             console.log(`Quality: ${stream.quality}`);
-            console.log(`URL: ${stream.url.substring(0, 100)}...`);
 
-            if (stream.title.includes('Multi-Audio')) {
-                console.log(`✅ SUCCESS: Found Multi-Audio stream!`);
+            if (stream.url.startsWith('data:')) {
+                console.log(`URL Type: Data URI (Custom Master)`);
+                if (index === 0) {
+                    const base64 = stream.url.split(',')[1];
+                    const content = Buffer.from(base64, 'base64').toString();
+                    fs.writeFileSync('granular_master.txt', content);
+                    console.log(`✅ Granular master playlist saved to granular_master.txt`);
+                }
+            } else {
+                console.log(`URL: ${stream.url.substring(0, 100)}...`);
             }
         });
 
-        const hasMultiAudio = streams.some(s => s.title.includes('Multi-Audio'));
-        const hasAuto = streams.some(s => s.quality === 'AUTO');
-
-        if (hasMultiAudio && hasAuto) {
-            console.log('\n✨ VERIFICATION PASSED: Master playlist with Multi-Audio detected and labeled correctly.');
-        } else if (streams.length > 0) {
-            console.log('\n⚠️ VERIFICATION INCOMPLETE: Streams found but no multi-audio master playlist detected. This might be because the chosen movie doesn\'t have multi-audio on the site.');
+        const hasGranular = streams.some(s => s.url.startsWith('data:'));
+        if (hasGranular) {
+            console.log('\n✨ VERIFICATION PASSED: Granular language-specific streams generated!');
         } else {
-            console.log('\n❌ VERIFICATION FAILED: No streams found.');
+            console.log('\n⚠️ VERIFICATION INCOMPLETE: No granular streams found.');
         }
 
     } catch (error) {
