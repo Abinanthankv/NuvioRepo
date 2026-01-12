@@ -578,6 +578,10 @@ async function parseMoviePage(url, depth = 0, contextText = "", season = null, e
             const text = $(el).text().trim();
 
             if (href && href.includes('/download/page/')) {
+                if (season) {
+                    const otherSeasonMatch = (combinedContext + " " + text).match(/(?:season|s)\s*0*(\d+)\b/i);
+                    if (otherSeasonMatch && parseInt(otherSeasonMatch[1]) !== parseInt(season)) return;
+                }
                 if (episode) {
                     const ePattern = new RegExp(`(?:epi|episode|e)\\s*0*${episode}\\b`, 'i');
                     if (!ePattern.test(text) && !ePattern.test(combinedContext)) return;
@@ -620,6 +624,10 @@ async function parseMoviePage(url, depth = 0, contextText = "", season = null, e
             if (!isMatch && text.match(/\d+x\d+/)) isMatch = true;
 
             if (isMatch) {
+                if (season) {
+                    const sMatch = text.match(/season\s*(\d+)/i);
+                    if (sMatch && parseInt(sMatch[1]) !== parseInt(season)) return;
+                }
                 const fullUrl = href.startsWith('http') ? href : `${MAIN_URL}${href}`;
                 subLinks.push({ url: fullUrl, text: $(el).text().trim() });
             }
