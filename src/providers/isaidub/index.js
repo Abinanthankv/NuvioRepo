@@ -680,7 +680,7 @@ async function extractFinalDownloadUrl(downloadPageUrl) {
 /**
  * Main function for Nuvio integration
  */
-async function getStreams(tmdbId, mediaType, season = null, episode = null) {
+async function getStreams(tmdbId, mediaType, season, episode) {
     if (mediaType === 'movie') {
         season = null;
         episode = null;
