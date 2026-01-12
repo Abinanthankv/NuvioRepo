@@ -11,6 +11,7 @@
     "devDependencies": {
         "cheerio": "^1.1.2",
         "cheerio-without-node-native": "^0.20.2",
+        "cloudscraper": "^4.6.0",
         "esbuild": "^0.20.0",
         "nodemon": "^3.0.0"
     },

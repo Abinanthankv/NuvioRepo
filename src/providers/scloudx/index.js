@@ -2,21 +2,56 @@
 // React Native compatible version
 
 const cheerio = require('cheerio-without-node-native');
+const config = require('./config.js');
 
 // TMDB API Configuration
 const TMDB_API_KEY = '1b3113663c9004682ed61086cf967c44';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 // Scloudx Configuration
-const MAIN_URL = "https://scloudx.lol";
+const MAIN_URL = config.MAIN_URL || "https://scloudx.lol";
 
-const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": `${MAIN_URL}/`,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5"
+// Build headers with Cloudflare cookie if available
+function getHeaders() {
+    const defaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-};
+    const headers = {
+        "User-Agent": config.USER_AGENT || defaultUA,
+        "Referer": `${MAIN_URL}/`,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "DNT": "1"
+    };
+
+    // Add Client Hints if available
+    if (config.CLIENT_HINTS) {
+        Object.assign(headers, config.CLIENT_HINTS);
+    }
+
+    // Prefer ALL_COOKIES if configured (full session string)
+    if (config.ALL_COOKIES && config.ALL_COOKIES.length > 20) {
+        headers["Cookie"] = config.ALL_COOKIES;
+        console.log("[Scloudx] Using ALL_COOKIES from config");
+    }
+    // Fallback to just cf_clearance
+    else if (config.CF_CLEARANCE && config.CF_CLEARANCE.length > 20 && config.CF_CLEARANCE !== "YOUR_CF_CLEARANCE_COOKIE_HERE") {
+        headers["Cookie"] = `cf_clearance=${config.CF_CLEARANCE}`;
+        console.log("[Scloudx] Using configured cf_clearance cookie");
+    } else {
+        console.warn("[Scloudx] No Cloudflare cookies configured - requests will likely be blocked");
+    }
+
+    return headers;
+}
+
+const HEADERS = getHeaders();
 
 // =================================================================================
 // UTILITY FUNCTIONS
@@ -247,7 +282,7 @@ async function searchTMDBByTitle(title, mediaType) {
 }
 
 /**
- * Searches Scloudx for content
+ * Searches Scloudx for content using the token system
  */
 async function search(query, mediaType, season = null, episode = null) {
     console.log(`[Scloudx] Searching for: "${query}" (type: ${mediaType}, S:${season}, E:${episode})`);
@@ -264,21 +299,39 @@ async function search(query, mediaType, season = null, episode = null) {
             }
         }
 
-        const searchUrl = `${MAIN_URL}/search/${encodeURIComponent(searchQuery)}`;
-        console.log(`[Scloudx] Search URL: ${searchUrl}`);
+        const tokenEndpoint = `${MAIN_URL}/get-search-token`;
+        console.log(`[Scloudx] Getting search token from: ${tokenEndpoint}`);
 
-        const response = await fetchWithTimeout(searchUrl, { headers: HEADERS }, 15000);
+        const searchHeaders = {
+            ...HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded",
+        };
 
-        if (!response.ok) {
-            console.error(`[Scloudx] Search failed with status: ${response.status}`);
+        const body = `search_query=${encodeURIComponent(searchQuery)}`;
+
+        // Step 1: POST to get-search-token
+        let response = await fetchWithTimeout(tokenEndpoint, {
+            method: 'POST',
+            headers: searchHeaders,
+            body: body,
+            redirect: 'follow'
+        }, 15000);
+
+        if (!response.ok && response.status !== 302) {
+            console.error(`[Scloudx] Token retrieval failed with status: ${response.status}`);
             return [];
         }
+
+        // If it was a redirect (some fetch implementations handle it, some don't with manual)
+        // We use redirect: 'follow' by default in our fetchWithTimeout
 
         const html = await response.text();
 
         // Check if we got Cloudflare challenge page
         if (html.includes('Just a moment') || html.includes('challenge-platform')) {
             console.error("[Scloudx] Cloudflare challenge detected - cannot proceed with simple fetch");
+            // If we have a direct search results URL from the response (e.g. if we were redirected)
+            // but still got a challenge, it means the session/token isn't enough to bypass CF
             return [];
         }
 
