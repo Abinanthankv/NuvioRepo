@@ -169,7 +169,17 @@ async function searchTMDBByTitle(title, mediaType) {
         if (!response.ok) return null;
         const data = await response.json();
         if (data.results && data.results.length > 0) {
-            const first = data.results[0];
+            // Filter out spin-offs and prefer main series
+            const spinoffKeywords = ['vigilantes', 'vigilante', 'gaiden', 'ova', 'special', 'recap'];
+
+            // Try to find a result that's not a spin-off
+            const mainSeries = data.results.find(result => {
+                const resultTitle = (result.title || result.name || '').toLowerCase();
+                return !spinoffKeywords.some(keyword => resultTitle.includes(keyword));
+            });
+
+            // Use main series if found, otherwise fall back to first result
+            const first = mainSeries || data.results[0];
             return {
                 title: first.title || first.name,
                 year: (first.release_date || first.first_air_date || '').split('-')[0]
@@ -183,30 +193,46 @@ async function searchTMDBByTitle(title, mediaType) {
 
 async function searchToonHub(query) {
     console.log(`[ToonHub] Searching for: "${query}"`);
-    try {
-        const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
-        const response = await fetchWithTimeout(searchUrl, { headers: HEADERS }, 8000);
-        if (!response.ok) return [];
 
-        const html = await response.text();
-        const $ = cheerio.load(html);
-        const results = [];
+    // Try multiple search strategies - prioritize simpler queries first for better anime matching
+    const searchQueries = [
+        query.split(':')[0].trim(), // Before colon (e.g., "Frieren" from "Frieren: Beyond Journey's End") - BEST
+        query.split(' ')[0], // First word only
+        query // Full title - try last as it might be too specific
+    ];
 
-        $('li.post-item').each((i, el) => {
-            const a = $(el).find('h2.post-title a');
-            const title = a.text().trim().split('[')[0].trim();
-            const href = a.attr('href');
-            if (href) {
-                results.push({ title, href });
+    for (const searchQuery of searchQueries) {
+        if (!searchQuery || searchQuery.length < 3) continue; // Skip very short queries
+
+        try {
+            const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(searchQuery)}`;
+            const response = await fetchWithTimeout(searchUrl, { headers: HEADERS }, 8000);
+            if (!response.ok) continue;
+
+            const html = await response.text();
+            const $ = cheerio.load(html);
+            const results = [];
+
+            $('li.post-item').each((i, el) => {
+                const a = $(el).find('h2.post-title a');
+                const title = a.text().trim().split('[')[0].trim();
+                const href = a.attr('href');
+                if (href) {
+                    results.push({ title, href });
+                }
+            });
+
+            if (results.length > 0) {
+                console.log(`[ToonHub] Found ${results.length} results with query: "${searchQuery}"`);
+                return results;
             }
-        });
-
-        console.log(`[ToonHub] Found ${results.length} results`);
-        return results;
-    } catch (error) {
-        console.error("[ToonHub] Search error:", error.message);
-        return [];
+        } catch (error) {
+            console.warn(`[ToonHub] Search error for "${searchQuery}":`, error.message);
+        }
     }
+
+    console.log(`[ToonHub] No results found for any search query`);
+    return [];
 }
 
 async function searchToonStream(query) {
@@ -479,6 +505,22 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         if (!bestMatch || maxScore < 0.4) {
             console.warn("[ToonHub] No good match found on ToonHub");
             return [];
+        }
+
+        // For TV shows, validate that the matched result has the requested season
+        if (mediaType === 'tv' && season) {
+            const matchSeasonMatch = bestMatch.title.match(/Season\s*(\d+)/i);
+            if (matchSeasonMatch) {
+                const matchSeason = parseInt(matchSeasonMatch[1]);
+                if (matchSeason !== season) {
+                    console.warn(`[ToonHub] Requested season ${season} not found. Best match only has season ${matchSeason}.`);
+                    return [];
+                }
+            } else {
+                // If no season number found in the match, reject it (could be specials, movies, etc.)
+                console.warn(`[ToonHub] Requested season ${season} but best match "${bestMatch.title}" has no season number.`);
+                return [];
+            }
         }
 
         console.log(`[ToonHub] Best match: "${bestMatch.title}" (score: ${maxScore.toFixed(2)})`);
