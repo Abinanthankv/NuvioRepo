@@ -14,8 +14,8 @@ const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": `${MAIN_URL}/`,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Cookie": "cf_clearance=GmEpz4Td9hFNSnIFuW2UwLkEdeYgfepsBtyrkxlet2w-1768201424-1.2.1.1-WfsVU1KhgRb04avWyiyDBf03AOfTTAwQ3lmz9euslCrP28NFlk9EIJDC5o6DBR6hHtjARcAeTaSv40ZxEUYgpJKegC4CdGZhg9pB14H_a5PzTiFPZSnUv6zerPCtTTRKvXC4rymx7m03ZlaHGXPeHFQVU48k4y5IqttaZ9fYvb.n3fc1vZGxzVJfrnooO6mySHnAGDRRT6oeA0sa8a8zTbRCWMo51QT0tgByVpJm.MehlYDlAtLv44rlSuIJAU.c"
+    "Accept-Language": "en-US,en;q=0.5"
+
 };
 
 // =================================================================================
