@@ -124,6 +124,27 @@
         "en"
       ],
       "supportsExternalPlayer": true
+    },
+    {
+      "id": "animelok",
+      "name": "Animelok",
+      "description": "Animelok provider for Nuvio (Anime in multiple languages)",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "src/providers/animelok.js",
+      "enabled": true,
+      "contentLanguage": [
+        "hi",
+        "ta",
+        "te",
+        "ml",
+        "en",
+        "ja"
+      ],
+      "supportsExternalPlayer": true
     }
   ]
 }
