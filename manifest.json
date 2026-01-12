@@ -1,16 +1,15 @@
 {
-  "name": "Spidey's Test Providers",
+  "name": "Spidey's  Providers",
   "version": "1.0.0",
   "scrapers": [
     {
       "id": "tamilmv",
       "name": "TamilMV",
-      "description": "TamilMV provider for Nuvio. Uses direct links from the homepage.",
+      "description": "TamilMV provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
-        "movie",
-        "tv"
+        "movie"
       ],
       "filename": "src/providers/tamilmv.js",
       "enabled": true,
@@ -23,7 +22,7 @@
     {
       "id": "tamilblasters",
       "name": "Tamilblasters",
-      "description": "Tamilblasters provider for Nuvio. Uses search-based forum scraping.",
+      "description": "Tamilblasters provider for Nuvio.",
       "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
@@ -41,7 +40,7 @@
     {
       "id": "tamilian",
       "name": "Tamilian",
-      "description": "Tamilian provider for Nuvio. Uses direct high-quality streams.",
+      "description": "Tamilian provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -58,7 +57,7 @@
     {
       "id": "moviesda",
       "name": "Moviesda",
-      "description": "Moviesda provider for Nuvio. Uses multi-level extraction for direct MP4 streams.",
+      "description": "Moviesda provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -75,7 +74,7 @@
     {
       "id": "movies4u",
       "name": "Movies4u",
-      "description": "Movies4u provider for Nuvio. Features Packer deobfuscation and HLS master resolution.",
+      "description": "Movies4u provider for Nuvio.",
       "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
@@ -93,7 +92,7 @@
     {
       "id": "isaidub",
       "name": "Isaidub",
-      "description": "Isaidub provider for Nuvio. Extracted from isaidub.love with multi-level scraping.",
+      "description": "Isaidub provider for Nuvio",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -104,6 +103,24 @@
       "enabled": true,
       "contentLanguage": [
         "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "toonhub",
+      "name": "ToonHub",
+      "description": "ToonHub provider for Nuvio (Animes & Cartoons)",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/toonhub.js",
+      "enabled": true,
+      "contentLanguage": [
+        "hi",
         "en"
       ],
       "supportsExternalPlayer": true
