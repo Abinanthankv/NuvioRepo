@@ -140,6 +140,7 @@ function findBestTitleMatch(mediaInfo, searchResults) {
 function formatStreamTitle(mediaInfo, stream) {
     const quality = stream.quality || "Unknown";
     const title = mediaInfo.title || "Unknown";
+    const isMaster = stream.isMaster || false;
 
     // Extract year from mediaInfo or search in title/text
     let year = mediaInfo.year || "";
@@ -182,11 +183,17 @@ function formatStreamTitle(mediaInfo, stream) {
         }
     }
 
+    // Add multi-audio tag to quality for master playlists
+    let displayQuality = quality;
+    if (isMaster) {
+        displayQuality = `${quality} (Multi-Audio)`;
+    }
+
     const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
     const sizeLine = (size && size !== "UNKNOWN") ? `💾: ${size} | 🚜: movies4u\n` : "";
 
-    return `Movies4u (Instant) (${quality})
-${typeLine}📼: ${title}${yearStr} - ${quality}
+    return `Movies4u (Instant) (${displayQuality})
+${typeLine}📼: ${title}${yearStr} - ${displayQuality}
 ${sizeLine}🌐: ${lang}`;
 }
 
@@ -214,6 +221,7 @@ function unpack(p, a, c, k) {
  */
 async function resolveHlsPlaylist(masterUrl) {
     const result = {
+        masterUrl: masterUrl,
         variants: [], // {url, quality}
         audios: [],
         isMaster: false
@@ -454,13 +462,32 @@ async function extractFromM4UPlay(embedUrl) {
                         console.log(`[Movies4u] Found multi-audio: ${resolutionResult.audios.join(', ')}`);
                     }
 
-                    // Return all variants found
-                    return resolutionResult.variants.map(v => ({
-                        url: v.url,
-                        audios: resolutionResult.audios,
-                        audioInfo: audioInfo,
-                        quality: v.quality
-                    }));
+                    const results = [];
+
+                    // If multi-audio is present, add the master URL as an "AUTO" quality option
+                    // This allows the player to handle BOTH quality switching and audio track selection
+                    if (resolutionResult.audios.length > 1) {
+                        results.push({
+                            url: resolutionResult.masterUrl,
+                            audios: resolutionResult.audios,
+                            audioInfo: audioInfo,
+                            quality: "AUTO",
+                            isMaster: true
+                        });
+                    }
+
+                    // Add all variants found
+                    resolutionResult.variants.forEach(v => {
+                        results.push({
+                            url: v.url,
+                            audios: resolutionResult.audios,
+                            audioInfo: audioInfo,
+                            quality: v.quality,
+                            isMaster: false
+                        });
+                    });
+
+                    return results;
                 }
             }
 
@@ -688,7 +715,8 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                     const streamObj = {
                         ...result,
                         quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
-                        text: watchLink.label
+                        text: watchLink.label,
+                        isMaster: result.isMaster
                     };
 
                     streams.push({
