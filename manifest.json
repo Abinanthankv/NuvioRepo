@@ -1,5 +1,5 @@
 {
-  "name": "Spidey's  Providers",
+  "name": "Spidey's Test Providers",
   "version": "1.0.0",
   "scrapers": [
     {
@@ -87,6 +87,23 @@
         "en",
         "ta",
         "hi"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "isaidub",
+      "name": "Isaidub",
+      "description": "Isaidub provider for Nuvio. Extracted from isaidub.love with multi-level scraping.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie"
+      ],
+      "filename": "src/providers/isaidub.js",
+      "enabled": true,
+      "contentLanguage": [
+        "ta",
+        "en"
       ],
       "supportsExternalPlayer": true
     }
