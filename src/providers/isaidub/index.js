@@ -277,7 +277,7 @@ async function searchTMDBByTitle(title, mediaType) {
 /**
  * Searches Isaidub by guessing direct URLs and browsing categories
  */
-async function search(query, year = null, mediaType = 'movie') {
+async function search(query, year = null, mediaType) {
     if (!year) {
         const yearMatch = query.match(/\b(19|20)\d{2}\b/);
         if (yearMatch) {
@@ -680,7 +680,11 @@ async function extractFinalDownloadUrl(downloadPageUrl) {
 /**
  * Main function for Nuvio integration
  */
-async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = null) {
+async function getStreams(tmdbId, mediaType, season = null, episode = null) {
+    if (mediaType === 'movie') {
+        season = null;
+        episode = null;
+    }
     console.log(`[Isaidub] Processing ${mediaType} ${tmdbId} (S:${season}, E:${episode})`);
 
     try {
