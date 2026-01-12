@@ -33,8 +33,9 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
 function normalizeTitle(title) {
     if (!title) return '';
     return title.toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, ' ')
+        .replace(/[-:]/g, ' ')  // Replace hyphens and colons with spaces
+        .replace(/[^a-z0-9\s]/g, '')  // Remove all other special characters
+        .replace(/\s+/g, ' ')  // Collapse multiple spaces
         .trim();
 }
 
@@ -74,7 +75,50 @@ function extractSeasonEpisodeFromFilename(filename) {
     return null;
 }
 
-function formatStreamTitle(mediaInfo, stream, seasonEpInfo) {
+function extractAudioInfoFromFilename(filename) {
+    if (!filename) return null;
+
+    const audioInfo = {
+        languages: [],
+        hasSubtitles: false,
+        audioType: null
+    };
+
+    // Check for subtitle indicators
+    if (/ESub|Subtitle|Sub/i.test(filename)) {
+        audioInfo.hasSubtitles = true;
+    }
+
+    // Check for audio type
+    if (/Multi\s*Audio/i.test(filename)) {
+        audioInfo.audioType = 'Multi Audio';
+        // Common languages in ToonHub multi-audio releases
+        audioInfo.languages = ['Hindi', 'English', 'Japanese'];
+    } else if (/Dual\s*Audio/i.test(filename)) {
+        audioInfo.audioType = 'Dual Audio';
+        // Try to extract specific languages
+        const langMatches = filename.match(/\b(Hindi|Tamil|Telugu|English|Eng|Japanese|Korean|Chinese)\b/gi);
+        if (langMatches) {
+            audioInfo.languages = [...new Set(langMatches.map(l => {
+                if (l.toLowerCase() === 'eng') return 'English';
+                return l.charAt(0).toUpperCase() + l.slice(1).toLowerCase();
+            }))];
+        }
+    } else {
+        // Try to extract specific languages mentioned
+        const langMatches = filename.match(/\b(Hindi|Tamil|Telugu|English|Eng|Japanese|Korean|Chinese)\b/gi);
+        if (langMatches) {
+            audioInfo.languages = [...new Set(langMatches.map(l => {
+                if (l.toLowerCase() === 'eng') return 'English';
+                return l.charAt(0).toUpperCase() + l.slice(1).toLowerCase();
+            }))];
+        }
+    }
+
+    return audioInfo;
+}
+
+function formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo) {
     const quality = stream.quality || 'Unknown';
     const title = toTitleCase(mediaInfo.title || 'Unknown');
     const year = mediaInfo.year ? ` (${mediaInfo.year})` : '';
@@ -87,9 +131,17 @@ function formatStreamTitle(mediaInfo, stream, seasonEpInfo) {
         episodeLabel = ` - ${stream.label}`;
     }
 
+    // Format audio information
+    let audioLabel = '🌐: HINDI/ENGLISH'; // Default fallback
+    if (audioInfo && audioInfo.languages.length > 0) {
+        const langs = audioInfo.languages.join('/');
+        const subInfo = audioInfo.hasSubtitles ? ' + ESub' : '';
+        audioLabel = `🎧: ${langs}${subInfo}`;
+    }
+
     return `ToonHub (${quality})
 📹: ${title}${year}${episodeLabel}
-🚜: toonhub | 🌐: HINDI/ENGLISH`;
+🚜: toonhub | ${audioLabel}`;
 }
 
 async function getTMDBDetails(tmdbId, mediaType) {
@@ -369,6 +421,12 @@ async function extractDirectStream(url) {
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
+    // For movies, ignore season and episode parameters
+    if (mediaType === 'movie') {
+        season = null;
+        episode = null;
+    }
+
     console.log(`[ToonHub] Processing ${mediaType} ${tmdbId} (S:${season}, E:${episode})`);
     try {
         let mediaInfo;
@@ -425,49 +483,13 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         console.log(`[ToonHub] Best match: "${bestMatch.title}" (score: ${maxScore.toFixed(2)})`);
 
-        // 1. Discovery on ToonStream (New Strategy)
-        let toonStreamResults = await searchToonStream(bestMatch.title);
-
-        // If no results, try with the original mediaInfo title (simpler)
-        if (toonStreamResults.length === 0 && mediaInfo.title !== bestMatch.title) {
-            toonStreamResults = await searchToonStream(mediaInfo.title);
-        }
-
-        let tsBestMatch = null;
-        let tsMaxScore = 0;
-        for (const res of toonStreamResults) {
-            const score = calculateTitleSimilarity(bestMatch.title, res.title);
-            const score2 = calculateTitleSimilarity(mediaInfo.title, res.title);
-            let finalScore = Math.max(score, score2);
-
-            // Boost series for TV/Anime
-            if (res.type === 'series') finalScore += 0.1;
-
-            console.log(`[ToonHub] ToonStream Compare: "${bestMatch.title}" vs "${res.title}" (${res.type}) - Score: ${finalScore.toFixed(2)}`);
-
-            if (finalScore > tsMaxScore) {
-                tsMaxScore = finalScore;
-                tsBestMatch = res;
-            }
-        }
-
-        const streams = [];
-        if (tsBestMatch && tsMaxScore > 0.45) {
-            console.log(`[ToonHub] Found matching series on ToonStream: ${tsBestMatch.title} (${tsBestMatch.type}, score: ${tsMaxScore.toFixed(2)})`);
-            // If the search result itself is an episode page, use it directly
-            let tsEpisodeUrl = tsBestMatch.type === 'episode' ? tsBestMatch.href : await getToonStreamEpisodes(tsBestMatch.href, episode || 1);
-
-            if (tsEpisodeUrl) {
-                console.log(`[ToonHub] Found direct ToonStream episode link: ${tsEpisodeUrl}`);
-                streams.push({ url: tsEpisodeUrl, quality: 'HD', label: `Episode ${episode}` });
-            }
-        }
-
-        // 2. Fallback/Supplement with ToonHub page links
+        // 1. Get ToonHub page links first (faster)
         const detailResponse = await fetchWithTimeout(bestMatch.href, { headers: HEADERS }, 8000);
         const detailHtml = await detailResponse.text();
         const $ = cheerio.load(detailHtml);
         const content = $('.entry-content');
+
+        const streams = [];
 
         if (mediaType === 'tv' && episode) {
             const epPadded = episode.toString().padStart(2, '0');
@@ -514,44 +536,125 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             });
         }
 
-        const finalResults = [];
-        const seenUrls = new Set();
+        // 2. Only search ToonStream if ToonHub page has no links (fallback)
+        if (streams.length === 0) {
+            console.log(`[ToonHub] No links found on ToonHub page, searching ToonStream as fallback...`);
+            let toonStreamResults = await searchToonStream(bestMatch.title);
 
-        for (const stream of streams) {
-            if (seenUrls.has(stream.url)) continue;
-            seenUrls.add(stream.url);
+            // If no results, try with the original mediaInfo title (simpler)
+            if (toonStreamResults.length === 0 && mediaInfo.title !== bestMatch.title) {
+                toonStreamResults = await searchToonStream(mediaInfo.title);
+            }
 
-            const finalUrl = await extractDirectStream(stream.url);
-            if (finalUrl) {
-                // Extract season/episode info from the filename in the URL
-                const filenameMatch = finalUrl.match(/name=([^&]+)/);
-                let seasonEpInfo = null;
-                let shouldInclude = true;
+            let tsBestMatch = null;
+            let tsMaxScore = 0;
+            for (const res of toonStreamResults) {
+                const score = calculateTitleSimilarity(bestMatch.title, res.title);
+                const score2 = calculateTitleSimilarity(mediaInfo.title, res.title);
+                let finalScore = Math.max(score, score2);
 
-                if (filenameMatch) {
-                    const filename = decodeURIComponent(filenameMatch[1]);
-                    seasonEpInfo = extractSeasonEpisodeFromFilename(filename);
+                // Boost series for TV/Anime
+                if (res.type === 'series') finalScore += 0.1;
 
-                    // Filter: only include if it matches the requested season/episode (for TV shows)
-                    if (mediaType === 'tv' && season && episode && seasonEpInfo) {
-                        if (seasonEpInfo.season !== season || seasonEpInfo.episode !== episode) {
-                            console.log(`[ToonHub] Filtering out S${String(seasonEpInfo.season).padStart(2, '0')}E${String(seasonEpInfo.episode).padStart(2, '0')} (requested S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')})`);
-                            shouldInclude = false;
-                        }
-                    }
-                }
+                console.log(`[ToonHub] ToonStream Compare: "${bestMatch.title}" vs "${res.title}" (${res.type}) - Score: ${finalScore.toFixed(2)}`);
 
-                if (shouldInclude) {
-                    finalResults.push({
-                        name: 'ToonHub',
-                        title: formatStreamTitle(mediaInfo, stream, seasonEpInfo),
-                        url: finalUrl,
-                        quality: stream.quality,
-                        headers: { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] },
-                        provider: 'ToonHub'
-                    });
+                if (finalScore > tsMaxScore) {
+                    tsMaxScore = finalScore;
+                    tsBestMatch = res;
                 }
             }
+
+            if (tsBestMatch && tsMaxScore > 0.45) {
+                console.log(`[ToonHub] Found matching series on ToonStream: ${tsBestMatch.title} (${tsBestMatch.type}, score: ${tsMaxScore.toFixed(2)})`);
+                // If the search result itself is an episode page, use it directly
+                let tsEpisodeUrl = tsBestMatch.type === 'episode' ? tsBestMatch.href : await getToonStreamEpisodes(tsBestMatch.href, episode || 1);
+
+                if (tsEpisodeUrl) {
+                    console.log(`[ToonHub] Found direct ToonStream episode link: ${tsEpisodeUrl}`);
+                    streams.push({ url: tsEpisodeUrl, quality: 'HD', label: `Episode ${episode}` });
+                }
+            }
+        } else {
+            console.log(`[ToonHub] Found ${streams.length} links on ToonHub page, skipping ToonStream search`);
+        }
+
+        const finalResults = [];
+        const seenUrls = new Set();
+        let matchingStreamsFound = 0;
+
+        // Process streams in parallel batches for better performance
+        const batchSize = 5; // Process 5 streams at a time
+        for (let i = 0; i < streams.length; i += batchSize) {
+            const batch = streams.slice(i, i + batchSize);
+
+            // Process batch in parallel
+            const batchResults = await Promise.all(
+                batch.map(async (stream) => {
+                    if (seenUrls.has(stream.url)) return null;
+                    seenUrls.add(stream.url);
+
+                    try {
+                        const finalUrl = await extractDirectStream(stream.url);
+                        if (!finalUrl) return null;
+
+                        // Extract season/episode info from the filename in the URL
+                        const filenameMatch = finalUrl.match(/name=([^&]+)/);
+                        let seasonEpInfo = null;
+                        let audioInfo = null;
+                        let shouldInclude = true;
+
+                        if (filenameMatch) {
+                            // Properly decode URL (replace + with space, then decode)
+                            const filename = decodeURIComponent(filenameMatch[1].replace(/\+/g, ' '));
+                            // Only extract season/episode info for TV shows, not movies
+                            seasonEpInfo = mediaType === 'tv' ? extractSeasonEpisodeFromFilename(filename) : null;
+                            audioInfo = extractAudioInfoFromFilename(filename);
+
+                            // Filter: only include if it matches the requested season/episode (for TV shows)
+                            if (mediaType === 'tv' && season && episode && seasonEpInfo) {
+                                if (seasonEpInfo.season !== season || seasonEpInfo.episode !== episode) {
+                                    console.log(`[ToonHub] Filtering out S${String(seasonEpInfo.season).padStart(2, '0')}E${String(seasonEpInfo.episode).padStart(2, '0')} (requested S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')})`);
+                                    shouldInclude = false;
+                                }
+                            }
+                        }
+
+                        if (shouldInclude) {
+                            return {
+                                name: 'ToonHub',
+                                title: formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo),
+                                url: finalUrl,
+                                quality: stream.quality,
+                                headers: { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] },
+                                provider: 'ToonHub',
+                                isMatch: seasonEpInfo && seasonEpInfo.season === season && seasonEpInfo.episode === episode
+                            };
+                        }
+                        return null;
+                    } catch (error) {
+                        console.warn(`[ToonHub] Error processing stream: ${error.message}`);
+                        return null;
+                    }
+                })
+            );
+
+            // Add valid results to finalResults
+            for (const result of batchResults) {
+                if (result) {
+                    finalResults.push(result);
+                    if (result.isMatch) {
+                        matchingStreamsFound++;
+                    }
+                    delete result.isMatch; // Remove temporary flag
+                }
+            }
+
+            // Early exit: if we have enough matching streams for the requested episode, stop processing
+            if (mediaType === 'tv' && matchingStreamsFound >= 3) {
+                console.log(`[ToonHub] Found ${matchingStreamsFound} streams for requested episode, stopping early`);
+                break;
+            }
+
             if (finalResults.length >= 10) break;
         }
 
