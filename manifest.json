@@ -107,25 +107,6 @@
         "en"
       ],
       "supportsExternalPlayer": true
-    },
-    {
-      "id": "scloudx",
-      "name": "Scloudx",
-      "description": "Scloudx provider for Nuvio. Direct downloads from Cloudflare Workers with instant availability.",
-      "version": "1.0.0",
-      "author": "User",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "filename": "src/providers/scloudx.js",
-      "enabled": true,
-      "contentLanguage": [
-        "en",
-        "hi",
-        "ta"
-      ],
-      "supportsExternalPlayer": true
     }
   ]
 }
