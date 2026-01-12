@@ -97,7 +97,8 @@
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
-        "movie"
+        "movie",
+        "tv"
       ],
       "filename": "src/providers/isaidub.js",
       "enabled": true,

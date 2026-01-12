@@ -2,7 +2,7 @@
  * Isaidub Provider Test
  */
 
-const { getStreams } = require('./src/providers/isaidub/index.js');
+const { getStreams } = require('./src/providers/isaidub.js');
 
 async function test() {
     console.log("Starting Isaidub test...");
