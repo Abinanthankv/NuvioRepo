@@ -181,7 +181,7 @@ function formatStreamTitle(mediaInfo, stream) {
   const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
   const sizeLine = (size && size !== "UNKNOWN") ? `💾: ${size} | 🚜: tamilblasters\n` : "";
 
-  // Language display
+  // Language display - consolidated for multi-audio
   let lang = language || "TAMIL";
   if (stream.audioInfo) lang = stream.audioInfo;
 
@@ -285,11 +285,12 @@ async function detectQualityFromM3U8(m3u8Url) {
     const content = await response.text();
 
     if (!content.includes('#EXTM3U')) {
-      return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [] };
+      return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [], isMaster: false, masterUrl: m3u8Url };
     }
 
     const variants = [];
     const audios = [];
+    let isMaster = false;
 
     // Parse audio tracks
     const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO.*?NAME="([^"]+)"(?:.*?CHANNELS="([^"]+)")?/g);
@@ -305,6 +306,7 @@ async function detectQualityFromM3U8(m3u8Url) {
 
     // Check for variant playlists
     if (content.includes('#EXT-X-STREAM-INF')) {
+      isMaster = true;
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -341,16 +343,16 @@ async function detectQualityFromM3U8(m3u8Url) {
     if (variants.length > 0) {
       const qualityWeights = { "4K": 2160, "1080p": 1080, "720p": 720, "480p": 480, "Unknown": 0 };
       variants.sort((a, b) => (qualityWeights[b.quality] || 0) - (qualityWeights[a.quality] || 0));
-      return { variants, audios };
+      return { variants, audios, isMaster, masterUrl: m3u8Url };
     }
 
     const qualityMatch = content.match(/\b(2160p|1080p|720p|480p|4K|UHD|HD)\b/i);
     const quality = qualityMatch ? qualityMatch[0] : "Unknown";
 
-    return { variants: [{ url: m3u8Url, quality }], audios };
+    return { variants: [{ url: m3u8Url, quality }], audios, isMaster: false, masterUrl: m3u8Url };
   } catch (error) {
     console.error(`[Tamilblasters] Error detecting quality: ${error.message}`);
-    return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [] };
+    return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [], isMaster: false, masterUrl: m3u8Url };
   }
 }
 
@@ -672,13 +674,29 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
             if (result && result.variants && result.variants.length > 0) {
               const audioInfo = result.audios.length > 0 ? result.audios.join(', ') : "";
-              for (const variant of result.variants) {
+
+              // If it's a master playlist with multiple audios, pick just the master
+              if (result.isMaster && result.audios.length > 1) {
+                // Best quality from variants
+                const bestQuality = result.variants[0].quality;
                 directStreams.push({
                   ...stream,
-                  url: variant.url,
-                  quality: variant.quality,
-                  audioInfo: audioInfo
+                  url: result.masterUrl,
+                  quality: bestQuality,
+                  audioInfo: audioInfo,
+                  isMaster: true
                 });
+              } else {
+                // Otherwise fallback to individual variants
+                for (const variant of result.variants) {
+                  directStreams.push({
+                    ...stream,
+                    url: variant.url,
+                    quality: variant.quality,
+                    audioInfo: audioInfo,
+                    isMaster: false
+                  });
+                }
               }
             }
           } catch (error) {

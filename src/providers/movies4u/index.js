@@ -170,36 +170,24 @@ function formatStreamTitle(mediaInfo, stream) {
 
     const yearStr = year ? ` (${year})` : "";
 
-    // Determine language - handle multi-audio and specific language display
+    // Determine language - handle multi-audio consolidated display
     let lang = "UNKNOWN";
-    const selectedAudio = stream.selectedAudio || "";
 
-    if (selectedAudio) {
-        lang = selectedAudio.toUpperCase();
-    } else if (audioInfo) {
+    if (audioInfo) {
         const multiMatch = audioInfo.match(/\[Multi Audio: (.*?)\]/i);
-        const singleMatch = audioInfo.match(/\[Audio: (.*?)\]/i);
-
         if (multiMatch) {
             lang = multiMatch[1].toUpperCase();
-        } else if (singleMatch) {
-            lang = singleMatch[1].toUpperCase();
-        } else if (audioInfo.toLowerCase().includes('tamil')) {
-            lang = 'TAMIL';
         } else {
-            lang = audioInfo.toUpperCase();
+            const singleMatch = audioInfo.match(/\[Audio: (.*?)\]/i);
+            if (singleMatch) {
+                lang = singleMatch[1].toUpperCase();
+            } else {
+                lang = audioInfo.toUpperCase();
+            }
         }
     }
 
-    // Add specific audio tag for master playlists with selected audio
-    let displayQuality = quality;
-    if (isMaster) {
-        if (selectedAudio) {
-            displayQuality = `${quality} (${selectedAudio})`;
-        } else {
-            displayQuality = `${quality} (Multi-Audio)`;
-        }
-    }
+    const displayQuality = quality;
 
     const typeLine = (type && type !== "UNKNOWN") ? `📺: ${type}\n` : "";
     const sizeLine = (size && size !== "UNKNOWN") ? `💾: ${size} | 🚜: movies4u\n` : "";
@@ -263,7 +251,6 @@ async function resolveHlsPlaylist(masterUrl) {
         }
 
         // Parse audio tracks (#EXT-X-MEDIA:TYPE=AUDIO)
-        // #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="हिन्दी",LANGUAGE="hi",CHANNELS="2",URI="index-a1.m3u8..."
         const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO,.*?NAME="([^"]+)"(?:.*?LANGUAGE="([^"]+)")?(?:.*?CHANNELS="([^"]+)")?(?:.*?URI="([^"]+)")?/g);
         for (const match of audioMatches) {
             let audioName = match[1];
@@ -296,10 +283,7 @@ async function resolveHlsPlaylist(masterUrl) {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             if (line.includes('#EXT-X-STREAM-INF')) {
-                // Extract quality from line
                 let quality = "Unknown";
-
-                // 1. Try RESOLUTION tag
                 const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
                 if (resMatch) {
                     const height = parseInt(resMatch[2]);
@@ -309,14 +293,11 @@ async function resolveHlsPlaylist(masterUrl) {
                     else if (height >= 480) quality = "480p";
                     else quality = `${height}p`;
                 }
-
-                // 2. Try NAME tag if resolution fails or as a supplement
                 if (quality === "Unknown") {
                     const nameMatch = line.match(/NAME="([^"]+)"/i);
                     if (nameMatch) quality = nameMatch[1];
                 }
 
-                // Find next non-empty, non-tag line which should be the URL
                 let j = i + 1;
                 while (j < lines.length && (lines[j].trim().startsWith('#') || !lines[j].trim())) {
                     j++;
@@ -330,14 +311,11 @@ async function resolveHlsPlaylist(masterUrl) {
                             const baseUrl = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
                             variantUrl = baseUrl + variantUrl;
                         }
-
-                        // Check for duplicates
                         if (!result.variants.some(v => v.url === variantUrl)) {
                             result.variants.push({ url: variantUrl, quality });
                         }
                     }
                 }
-                // Skip the lines we've processed
                 i = j;
             }
         }
@@ -356,192 +334,76 @@ async function resolveHlsPlaylist(masterUrl) {
 
 /**
  * Extracts stream URL from m4uplay.com embed page
- * The page uses packed JavaScript that needs to be unpacked
- * @param {string} embedUrl The m4uplay.com embed URL
- * @returns {Promise<string|null>} Direct stream URL or null
  */
 async function extractFromM4UPlay(embedUrl) {
     try {
         console.log(`[Movies4u] Extracting from m4uplay: ${embedUrl}`);
-
         const response = await fetchWithTimeout(embedUrl, {
-            headers: {
-                ...HEADERS,
-                'Referer': MAIN_URL
-            }
+            headers: { ...HEADERS, 'Referer': MAIN_URL }
         }, 8000);
 
         const html = await response.text();
-
-        // Check for Packer obfuscation
-        // Pattern: eval(function(p,a,c,k,e,d){...}('...',36,545,'...'.split('|')))
         const packerMatch = html.match(/eval\(function\(p,a,c,k,e,d\)\{.*?\}\s*\((.*)\)\s*\)/s);
         let unpackedHtml = html;
 
         if (packerMatch) {
-            console.log(`[Movies4u] Detected Packer obfuscation on m4uplay`);
             try {
                 const rawArgs = packerMatch[1].trim();
-                // Extract arguments: p, a, c, k
-                // p is the string, a is base, c is count, k is token array
                 const argsMatch = rawArgs.match(/^['"](.*)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"](.*?)['"]\.split\(['"]\|['"]\)/s);
-
                 if (argsMatch) {
-                    const p = argsMatch[1];
-                    const a = parseInt(argsMatch[2]);
-                    const c = parseInt(argsMatch[3]);
-                    const k = argsMatch[4].split('|');
-
-                    const unpacked = unpack(p, a, c, k);
-                    unpackedHtml += "\n" + unpacked;
-                    console.log(`[Movies4u] Successfully unpacked script`);
+                    unpackedHtml += "\n" + unpack(argsMatch[1], parseInt(argsMatch[2]), parseInt(argsMatch[3]), argsMatch[4].split('|'));
                 }
-            } catch (unpackError) {
-                console.error(`[Movies4u] Packer unpacking failed: ${unpackError.message}`);
-            }
+            } catch (unpackError) { }
         }
-
-        // Now search in both original and unpacked HTML
 
         let finalStreamUrl = null;
+        const hlsPatterns = [
+            /https?:\/\/[^\s"']+\.(?:m3u8|txt)(?:\?[^\s"']*)?/,
+            /["']?(\/(?:stream|3o)\/[^"'\s]+\.(?:m3u8|txt))[^\s"']*/,
+            /["']file["']\s*:\s*["']([^"']+\.(?:m3u8|txt)[^"']*)["']/,
+            /https?:\/\/[^\s"']*master\.txt[^\s"']*/,
+            /["'](?:playlist|sources)["']\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["']([^"']+)["']/s,
+            /([\/a-zA-Z0-9_\-\.]+\/master\.(?:m3u8|txt))/
+        ];
 
-        // 1. Look for absolute HLS URLs (m3u8 or txt)
-        const absoluteHlsMatch = unpackedHtml.match(/https?:\/\/[^\s"']+\.(?:m3u8|txt)(?:\?[^\s"']*)?/);
-        if (absoluteHlsMatch) {
-            console.log(`[Movies4u] Found absolute HLS URL: ${absoluteHlsMatch[0]}`);
-            finalStreamUrl = absoluteHlsMatch[0];
-        }
-
-        // 2. Look for relative stream paths (common patterns: /stream/... or /3o/...)
-        if (!finalStreamUrl) {
-            const relativeStreamMatch = unpackedHtml.match(/["']?(\/(?:stream|3o)\/[^"'\s]+\.(?:m3u8|txt))[^\s"']*/);
-            if (relativeStreamMatch) {
-                let streamUrl = relativeStreamMatch[1];
-                if (streamUrl.startsWith('/')) {
-                    streamUrl = M4UPLAY_BASE + streamUrl;
-                }
-                console.log(`[Movies4u] Found relative stream URL: ${streamUrl}`);
-                finalStreamUrl = streamUrl;
-            }
-        }
-
-        // 3. Look for JWPlayer setup with file property (supporting m3u8 and txt)
-        if (!finalStreamUrl) {
-            const jwplayerFileMatch = unpackedHtml.match(/["']file["']\s*:\s*["']([^"']+\.(?:m3u8|txt)[^"']*)["']/);
-            if (jwplayerFileMatch) {
-                let streamUrl = jwplayerFileMatch[1];
-                if (streamUrl.startsWith('/')) {
-                    streamUrl = M4UPLAY_BASE + streamUrl;
-                }
-                console.log(`[Movies4u] Found stream URL from JWPlayer file property: ${streamUrl}`);
-                finalStreamUrl = streamUrl;
-            }
-        }
-
-        // 4. Look for master.txt specifically
-        if (!finalStreamUrl) {
-            const masterTxtMatch = unpackedHtml.match(/https?:\/\/[^\s"']*master\.txt[^\s"']*/);
-            if (masterTxtMatch) {
-                console.log(`[Movies4u] Found master.txt HLS URL: ${masterTxtMatch[0]}`);
-                finalStreamUrl = masterTxtMatch[0];
-            }
-        }
-
-        // 5. Look for playlist or sources array
-        if (!finalStreamUrl) {
-            const playlistMatch = unpackedHtml.match(/["'](?:playlist|sources)["']\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["']([^"']+)["']/s);
-            if (playlistMatch) {
-                let streamUrl = playlistMatch[1];
-                if (streamUrl.startsWith('/')) {
-                    streamUrl = M4UPLAY_BASE + streamUrl;
-                }
-                console.log(`[Movies4u] Found stream URL from playlist/sources: ${streamUrl}`);
-                finalStreamUrl = streamUrl;
-            }
-        }
-
-        // 6. Look for any master.m3u8 or master.txt file references (permissive)
-        if (!finalStreamUrl) {
-            const anyMasterMatch = unpackedHtml.match(/([\/a-zA-Z0-9_\-\.]+\/master\.(?:m3u8|txt))/);
-            if (anyMasterMatch) {
-                let streamUrl = anyMasterMatch[1];
-                if (streamUrl.startsWith('/')) {
-                    streamUrl = M4UPLAY_BASE + streamUrl;
-                }
-                console.log(`[Movies4u] Found master reference: ${streamUrl}`);
-                finalStreamUrl = streamUrl;
+        for (const pattern of hlsPatterns) {
+            const match = unpackedHtml.match(pattern);
+            if (match) {
+                let url = match[1] || match[0];
+                if (url.startsWith('/')) url = M4UPLAY_BASE + url;
+                finalStreamUrl = url;
+                break;
             }
         }
 
         if (finalStreamUrl) {
-            // Check if it's a master playlist and resolve to variants if so
             if (finalStreamUrl.includes('master.')) {
                 console.log(`[Movies4u] Resolving master playlist...`);
                 const resolutionResult = await resolveHlsPlaylist(finalStreamUrl);
 
                 if (resolutionResult.isMaster) {
-                    const results = [];
-                    const audioTracks = resolutionResult.audios;
+                    const audioNames = resolutionResult.audios.map(a => a.name);
+                    const audioInfo = audioNames.length > 1 ? ` [Multi Audio: ${audioNames.join(', ')}]` : "";
 
-                    // Helper to create a custom master playlist that defaults a specific audio track
-                    const createLanguageMaster = (targetAudioName) => {
-                        let newContent = "#EXTM3U\n";
-
-                        // Add audio tracks, making the target one the default
-                        for (const audio of audioTracks) {
-                            const isTarget = audio.name === targetAudioName;
-                            const defaultTag = isTarget ? 'DEFAULT=YES,AUTOSELECT=YES' : 'DEFAULT=NO,AUTOSELECT=NO';
-                            newContent += `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",NAME="${audio.name}",LANGUAGE="${audio.language}",${defaultTag},URI="${audio.uri}"\n`;
-                        }
-
-                        // Add variants
-                        for (const variant of resolutionResult.variants) {
-                            newContent += `#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=${variant.quality.includes('p') ? '1280x' + variant.quality.replace('p', '') : '1280x720'},AUDIO="audio0"\n`;
-                            newContent += `${variant.url}\n`;
-                        }
-
-                        // Convert to data URI
-                        try {
-                            const base64 = typeof Buffer !== 'undefined'
-                                ? Buffer.from(newContent).toString('base64')
-                                : btoa(newContent);
-                            return `data:application/vnd.apple.mpegurl;base64,${base64}`;
-                        } catch (e) {
-                            return resolutionResult.masterUrl; // Fallback
-                        }
-                    };
-
-                    // If multiple audios, create separate entries for each quality-language combination
-                    if (audioTracks.length > 1) {
-                        for (const audio of audioTracks) {
-                            const langMasterUrl = createLanguageMaster(audio.name);
-
-                            for (const variant of resolutionResult.variants) {
-                                results.push({
-                                    url: langMasterUrl,
-                                    audios: audioTracks,
-                                    audioInfo: `[Audio: ${audio.name}]`,
-                                    quality: variant.quality,
-                                    selectedAudio: audio.name,
-                                    isMaster: true
-                                });
-                            }
-                        }
-                    } else {
-                        // Return normal variants if single or no audio info
-                        const audioInfo = audioTracks.length > 0 ? `[Audio: ${audioTracks[0].name}]` : "";
-                        resolutionResult.variants.forEach(v => {
-                            results.push({
-                                url: v.url,
-                                audios: audioTracks,
-                                audioInfo: audioInfo,
-                                quality: v.quality,
-                                isMaster: false
-                            });
-                        });
+                    if (audioNames.length > 1) {
+                        console.log(`[Movies4u] Found multi-audio: ${audioNames.join(', ')}`);
                     }
 
-                    return results;
+                    // Identify best quality from variants
+                    const qualities = resolutionResult.variants.map(v => v.quality);
+                    const bestQuality = qualities.includes('4K') ? '4K' :
+                        qualities.includes('1080p') ? '1080p' :
+                            qualities.includes('720p') ? '720p' :
+                                qualities.includes('480p') ? '480p' :
+                                    qualities[0] || "Unknown";
+
+                    return [{
+                        url: resolutionResult.masterUrl,
+                        audios: resolutionResult.audios,
+                        audioInfo: audioInfo,
+                        quality: bestQuality,
+                        isMaster: true
+                    }];
                 }
             }
 
@@ -555,7 +417,6 @@ async function extractFromM4UPlay(embedUrl) {
 
         console.log(`[Movies4u] Could not extract stream URL from m4uplay embed`);
         return [];
-
     } catch (error) {
         console.error(`[Movies4u] M4UPlay extraction error: ${error.message}`);
         return [];
@@ -564,36 +425,25 @@ async function extractFromM4UPlay(embedUrl) {
 
 /**
  * Extracts watch links from movie page
- * @param {string} movieUrl The movie page URL
- * @returns {Promise<Array>} Array of watch link objects
  */
 async function extractWatchLinks(movieUrl) {
     try {
         console.log(`[Movies4u] Extracting watch links from: ${movieUrl}`);
-
-        const response = await fetchWithTimeout(movieUrl, {
-            headers: HEADERS
-        }, 8000);
-
+        const response = await fetchWithTimeout(movieUrl, { headers: HEADERS }, 8000);
         const html = await response.text();
         const $ = cheerio.load(html);
-
         const watchLinks = [];
 
-        // Find all watch links with class btn btn-zip
         $('a.btn.btn-zip').each((i, el) => {
             const href = $(el).attr('href');
             const text = $(el).text().trim();
-
-            // Only include m4uplay.com links
             if (href && href.includes('m4uplay.com')) {
                 watchLinks.push({
                     url: href,
                     quality: text.includes('1080p') ? '1080p' :
                         text.includes('720p') ? '720p' :
                             text.includes('480p') ? '480p' :
-                                text.includes('4K') || text.includes('2160p') ? '4K' :
-                                    text.includes('iMAX') ? 'iMAX' : 'Unknown',
+                                text.includes('4K') || text.includes('2160p') ? '4K' : 'Unknown',
                     label: text
                 });
             }
@@ -601,7 +451,6 @@ async function extractWatchLinks(movieUrl) {
 
         console.log(`[Movies4u] Found ${watchLinks.length} watch links`);
         return watchLinks;
-
     } catch (error) {
         console.error(`[Movies4u] Error extracting watch links: ${error.message}`);
         return [];
@@ -618,66 +467,35 @@ async function extractWatchLinks(movieUrl) {
 async function getTMDBDetails(tmdbId, mediaType) {
     const type = mediaType === 'movie' ? 'movie' : 'tv';
     const url = `${TMDB_BASE_URL}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}`;
-
-    try {
-        const response = await fetchWithTimeout(url, {}, 8000);
-        if (!response.ok) {
-            throw new Error(`TMDB error: ${response.status}`);
-        }
-        const data = await response.json();
-
-        if (!data.title && !data.name) {
-            throw new Error('TMDB returned no title');
-        }
-
-        const info = {
-            title: data.title || data.name,
-            year: (data.release_date || data.first_air_date || "").split("-")[0]
-        };
-        console.log(`[Movies4u] TMDB Info: "${info.title}" (${info.year || 'N/A'})`);
-        return info;
-    } catch (error) {
-        console.error("[Movies4u] Error fetching TMDB metadata:", error.message);
-        throw error;
-    }
+    const response = await fetchWithTimeout(url, {}, 8000);
+    if (!response.ok) throw new Error(`TMDB error: ${response.status}`);
+    const data = await response.json();
+    return {
+        title: data.title || data.name,
+        year: (data.release_date || data.first_air_date || "").split("-")[0]
+    };
 }
-
 
 /**
  * Searches movies4u.fans for a movie
- * @param {string} query Search query
- * @returns {Promise<Array>} Array of search results
  */
 async function searchMovies(query) {
     try {
         const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
         console.log(`[Movies4u] Searching: ${searchUrl}`);
-
-        const response = await fetchWithTimeout(searchUrl, {
-            headers: HEADERS
-        }, 8000);
-
+        const response = await fetchWithTimeout(searchUrl, { headers: HEADERS }, 8000);
         const html = await response.text();
         const $ = cheerio.load(html);
-
         const results = [];
 
-        // Extract search results using h3.entry-title a selector
         $('h3.entry-title a').each((i, el) => {
             const title = $(el).text().trim();
             const url = $(el).attr('href');
-
-            if (title && url) {
-                results.push({
-                    title,
-                    url
-                });
-            }
+            if (title && url) results.push({ title, url });
         });
 
         console.log(`[Movies4u] Found ${results.length} search results`);
         return results;
-
     } catch (error) {
         console.error(`[Movies4u] Search error: ${error.message}`);
         return [];
@@ -686,121 +504,69 @@ async function searchMovies(query) {
 
 /**
  * Main function for Nuvio integration
- * @param {string} tmdbId TMDB ID or movie title
- * @param {string} mediaType "movie" or "tv"
- * @param {number} season Season number (TV only)
- * @param {number} episode Episode number (TV only)
- * @returns {Promise<Array>} Array of stream objects
  */
 async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = null) {
     console.log(`[Movies4u] Processing ${mediaType} ${tmdbId}`);
-
     try {
         let mediaInfo;
-
-        // Try to get TMDB details first if ID is numeric
         const isNumericId = /^\d+$/.test(tmdbId);
         if (isNumericId) {
             try {
                 mediaInfo = await getTMDBDetails(tmdbId, mediaType);
             } catch (error) {
-                console.log(`[Movies4u] TMDB fetch failed for ${tmdbId}, using as search query`);
                 mediaInfo = { title: tmdbId, year: null };
             }
         } else {
-            console.log(`[Movies4u] Using "${tmdbId}" as search query directly`);
             mediaInfo = { title: tmdbId, year: null };
         }
 
-        // Search for the movie
         const searchResults = await searchMovies(mediaInfo.title);
-
-        if (searchResults.length === 0) {
-            console.warn("[Movies4u] No search results found");
-            return [];
-        }
-
-        // Find best match
+        if (searchResults.length === 0) return [];
         const bestMatch = findBestTitleMatch(mediaInfo, searchResults);
-
-        if (!bestMatch) {
-            console.warn("[Movies4u] No matching title found in search results");
-            return [];
-        }
+        if (!bestMatch) return [];
 
         console.log(`[Movies4u] Found match: ${bestMatch.title}`);
-
-        // Refine mediaInfo from bestMatch if TMDB info is less specific or missing
-        const titleParts = bestMatch.title.split('(');
-        const siteTitle = titleParts[0].trim();
         const yearMatch = bestMatch.title.match(/\((20\d{2}|19\d{2})\)/);
-
-        // Update title and year if they are currently just the search query or incorrect
-        if (mediaInfo.title.toLowerCase() === tmdbId.toLowerCase() || mediaInfo.title === mediaInfo.title.toLowerCase()) {
-            mediaInfo.title = siteTitle;
+        if (mediaInfo.title.toLowerCase() === tmdbId.toLowerCase()) {
+            mediaInfo.title = bestMatch.title.split('(')[0].trim();
             if (yearMatch) mediaInfo.year = yearMatch[1];
-        } else if (!mediaInfo.year && yearMatch) {
-            mediaInfo.year = yearMatch[1];
         }
 
-        // Ensure title isn't lowercase
-        if (mediaInfo.title === mediaInfo.title.toLowerCase()) {
-            mediaInfo.title = toTitleCase(mediaInfo.title);
-        }
-
-        // Extract watch links from movie page
         const watchLinks = await extractWatchLinks(bestMatch.url);
+        if (watchLinks.length === 0) return [];
 
-        if (watchLinks.length === 0) {
-            console.warn("[Movies4u] No watch links found on movie page");
-            return [];
-        }
-
-        // Extract streams from each watch link
         const streams = [];
-
         for (const watchLink of watchLinks) {
             const extractionResults = await extractFromM4UPlay(watchLink.url);
+            for (const result of extractionResults) {
+                const streamObj = {
+                    ...result,
+                    quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
+                    text: watchLink.label,
+                    isMaster: result.isMaster
+                };
 
-            if (extractionResults && extractionResults.length > 0) {
-                const cleanTitle = bestMatch.title.split("(")[0].trim();
-
-                for (const result of extractionResults) {
-                    const streamObj = {
-                        ...result,
-                        quality: result.quality !== "Unknown" ? result.quality : watchLink.quality,
-                        text: watchLink.label,
-                        isMaster: result.isMaster
-                    };
-
-                    streams.push({
-                        name: "Movies4u",
-                        title: formatStreamTitle(mediaInfo, streamObj),
-                        url: result.url,
-                        quality: streamObj.quality,
-                        headers: {
-                            "Referer": M4UPLAY_BASE,
-                            "User-Agent": HEADERS["User-Agent"]
-                        },
-                        provider: 'Movies4u'
-                    });
-                }
+                streams.push({
+                    name: "Movies4u",
+                    title: formatStreamTitle(mediaInfo, streamObj),
+                    url: result.url,
+                    quality: streamObj.quality,
+                    headers: { "Referer": M4UPLAY_BASE, "User-Agent": HEADERS["User-Agent"] },
+                    provider: 'Movies4u'
+                });
             }
         }
 
         console.log(`[Movies4u] Extracted ${streams.length} streams`);
         return streams;
-
     } catch (error) {
         console.error("[Movies4u] getStreams failed:", error.message);
         return [];
     }
 }
 
-// Export the main function
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getStreams };
 } else {
-    // For React Native environment
     global.getStreams = { getStreams };
 }
