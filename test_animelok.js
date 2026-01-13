@@ -17,7 +17,24 @@ async function getTMDBTitle(id, type, retries = 3) {
     }
 }
 
-async function runTest(query, type = 'tv', episode = 1, season = 1) {
+async function checkLink(url, headers = {}) {
+    try {
+        const res = await axios.head(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://animelok.to/',
+                ...headers
+            },
+            timeout: 5000,
+            validateStatus: () => true
+        });
+        return res.status >= 200 && res.status < 400;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function runTest(query, type = 'tv', season = 1, episode = 1) {
     let title = query;
 
     // Let the provider handle TMDB IDs internally
@@ -59,8 +76,26 @@ async function runTest(query, type = 'tv', episode = 1, season = 1) {
         return;
     }
 
-    console.log(`\nFound ${streams.length} stream(s):`);
-    streams.forEach((s, i) => {
+    console.log(`\nValidating ${streams.length} stream(s)...`);
+    const validStreams = [];
+    for (const s of streams) {
+        process.stdout.write(`Checking: ${s.title.split('\n')[0]}... `);
+        const isValid = await checkLink(s.url, s.headers);
+        if (isValid) {
+            console.log('✅ WORKING');
+            validStreams.push(s);
+        } else {
+            console.log('❌ FAILED (403/Error)');
+        }
+    }
+
+    if (validStreams.length === 0) {
+        console.log('\nNo working streams found.');
+        return;
+    }
+
+    console.log(`\nFound ${validStreams.length} working stream(s):`);
+    validStreams.forEach((s, i) => {
         console.log(`${i + 1}. ${s.title}`);
         console.log(`   URL: ${s.url}`);
         if (s.subtitles && s.subtitles.length > 0) {
@@ -84,4 +119,4 @@ const type = args[1] || 'tv';
 const season = parseInt(args[2]) || 1;
 const episode = parseInt(args[3]) || 1;
 
-runTest(query, type, episode, season);
+runTest(query, type, season, episode);

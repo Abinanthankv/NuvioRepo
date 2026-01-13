@@ -130,6 +130,8 @@ async function getStreams(id, type, season, episode) {
         const streams = [];
         const subtitles = (episodeData.subtitles || []).map(sub => ({
             url: sub.url,
+            label: sub.name,
+            lang: sub.name,
             language: sub.name,
             format: sub.url.endsWith('.vtt') ? 'vtt' : 'srt'
         }));
@@ -139,14 +141,23 @@ async function getStreams(id, type, season, episode) {
             const languages = server.languages || [];
             const hasSubtitles = subtitles.length > 0;
 
+            const commonHeaders = {
+                'Referer': `${BASE_URL}/watch/${animeSlug}?ep=${episode}`,
+                'User-Agent': USER_AGENT
+            };
+
             // Handle Multi server (as-cdn)
             if (server.url.includes('zephyrflick.top') || server.url.includes('as-cdn')) {
                 const videoIdMatch = server.url.match(/\/video\/([a-f0-9]{32})/);
                 if (videoIdMatch) {
                     const videoId = videoIdMatch[1];
-                    const stream = await extractAsCdnStream(videoId, serverName, data.anime, season, episode, languages, hasSubtitles);
+                    const stream = await extractAsCdnStream(videoId, serverName, data.anime || data.movie, season, episode, languages, hasSubtitles);
                     if (stream) {
                         stream.subtitles = subtitles;
+                        stream.headers = {
+                            ...commonHeaders,
+                            'Referer': `https://as-cdn21.top/video/${videoId}`
+                        };
                         streams.push(stream);
                     }
                 }
@@ -156,10 +167,12 @@ async function getStreams(id, type, season, episode) {
                 try {
                     const sources = JSON.parse(server.url);
                     for (const source of sources) {
+                        let url = source.url;
                         streams.push({
-                            title: formatTitle(data.anime, serverName, source.quality || 'Auto', season, episode, languages, hasSubtitles),
-                            url: source.url,
+                            title: formatTitle(data.anime || data.movie, serverName, source.quality || 'Auto', season, episode, languages, hasSubtitles),
+                            url: url,
                             type: 'hls',
+                            headers: commonHeaders,
                             subtitles
                         });
                     }
@@ -167,17 +180,38 @@ async function getStreams(id, type, season, episode) {
                     console.error('Failed to parse direct HLS sources:', e.message);
                 }
             }
-            // Handle other direct m3u8 links
+            // Handle other direct m3u8 links (often master playlists)
             else if (server.url.includes('.m3u8')) {
+                let masterUrl = server.url;
                 streams.push({
                     title: formatTitle(data.anime || data.movie, serverName, 'Auto', season, episode, languages, hasSubtitles),
-                    url: server.url,
+                    url: masterUrl,
                     type: 'hls',
+                    headers: commonHeaders,
                     subtitles
                 });
+
+                // Resolve individual qualities
+                try {
+                    const resolved = await resolveHlsPlaylist(server.url, commonHeaders);
+                    if (resolved && resolved.variants && resolved.variants.length > 0) {
+                        for (const variant of resolved.variants) {
+                            let vUrl = variant.url;
+                            const extraInfo = variant.extraInfo ? ` | ${variant.extraInfo}` : '';
+                            streams.push({
+                                title: formatTitle(data.anime || data.movie, serverName, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
+                                url: vUrl,
+                                type: 'hls',
+                                headers: commonHeaders,
+                                subtitles
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error('HLS resolution failed:', e.message);
+                }
             }
         }
-
         return streams;
     } catch (e) {
         console.error('getStreams failed:', e.message);
@@ -215,8 +249,8 @@ async function extractAsCdnStream(videoId, serverName, animeInfo, season, episod
     return null;
 }
 
-function formatTitle(animeInfo, serverName, quality, season, episode, languages, hasSubtitles) {
-    const title = animeInfo.title || 'Unknown';
+function formatTitle(animeInfo, serverName, quality, season, episode, languages, hasSubtitles, extraInfo = '') {
+    const title = (animeInfo && animeInfo.title) ? animeInfo.title : 'Unknown';
     const s = String(season || 1).padStart(2, '0');
     const e = String(episode || 1).padStart(2, '0');
     const epLabel = ` - S${s} E${e}`;
@@ -225,12 +259,104 @@ function formatTitle(animeInfo, serverName, quality, season, episode, languages,
     if (hasSubtitles) langStr += ' + ESub';
 
     // ToonHub style format:
-    // Animelok (Quality)
+    // Animelok [Server] (Quality)
     // 📹: Title - S01 E01
-    // 🚜: animelok | 🎧: Languages
-    return `Animelok (${quality || 'Auto'})
+    // 🚜: animelok | 🎧: Languages [| ExtraInfo]
+    return `Animelok [${serverName}] (${quality || 'Auto'})
 \u{1F4F9}: ${title}${epLabel}
-\u{1F69C}: animelok | \u{1F3A7}: ${langStr}`;
+\u{1F69C}: animelok | \u{1F3A7}: ${langStr}${extraInfo}`;
+}
+
+function parseCodecs(codecString) {
+    if (!codecString) return "";
+    const codecs = codecString.split(',').map(c => c.trim().toLowerCase());
+    const info = [];
+
+    for (const codec of codecs) {
+        if (codec.startsWith('avc')) info.push('H.264');
+        else if (codec.startsWith('hev') || codec.startsWith('hvc')) info.push('H.265');
+        else if (codec.startsWith('mp4a')) info.push('AAC');
+        else if (codec.startsWith('ec-3')) info.push('E-AC3');
+        else if (codec.startsWith('ac-3')) info.push('AC3');
+    }
+
+    return info.join('/');
+}
+
+async function resolveHlsPlaylist(masterUrl, headers = {}) {
+    try {
+        const response = await fetchWithTimeout(masterUrl, { headers }, 5000);
+        if (!response.ok) return null;
+
+        const content = await response.text();
+        if (!content.includes('#EXTM3U') || !content.includes('#EXT-X-STREAM-INF')) return null;
+
+        const variants = [];
+        const lines = content.split('\n');
+
+        // Extract audio info
+        const audioInfo = {};
+        const audioMatches = content.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="([^"]+)",NAME="([^"]+)"/g);
+        for (const match of audioMatches) {
+            audioInfo[match[1]] = match[2];
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line.includes('#EXT-X-STREAM-INF')) {
+                let quality = "Unknown";
+                const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+                if (resMatch) {
+                    const height = parseInt(resMatch[2]);
+                    if (height >= 2160) quality = "4K";
+                    else if (height >= 1080) quality = "1080p";
+                    else if (height >= 720) quality = "720p";
+                    else if (height >= 480) quality = "480p";
+                    else quality = `${height}p`;
+                }
+
+                if (quality === "Unknown") {
+                    const nameMatch = line.match(/NAME="([^"]+)"/i);
+                    if (nameMatch) quality = nameMatch[1];
+                }
+
+                // Extract codecs
+                const codecMatch = line.match(/CODECS="([^"]+)"/i);
+                const codecStr = codecMatch ? parseCodecs(codecMatch[1]) : "";
+
+                // Extract audio group
+                const audioMatch = line.match(/AUDIO="([^"]+)"/i);
+                const audioName = audioMatch ? audioInfo[audioMatch[1]] : "";
+
+                let extraInfo = codecStr;
+                if (audioName) extraInfo += (extraInfo ? ` | ${audioName}` : audioName);
+
+                let j = i + 1;
+                while (j < lines.length && (lines[j].trim().startsWith('#') || !lines[j].trim())) {
+                    j++;
+                }
+
+                if (j < lines.length) {
+                    let variantPath = lines[j].trim();
+                    if (variantPath) {
+                        let variantUrl = variantPath;
+                        if (!variantUrl.startsWith('http')) {
+                            const lastSlash = masterUrl.lastIndexOf('/');
+                            const baseUrl = masterUrl.substring(0, lastSlash + 1);
+                            variantUrl = baseUrl + variantUrl;
+                        }
+                        if (!variants.some(v => v.url === variantUrl)) {
+                            variants.push({ url: variantUrl, quality, extraInfo });
+                        }
+                    }
+                }
+                i = j;
+            }
+        }
+        return { variants };
+    } catch (e) {
+        return null;
+    }
 }
 
 module.exports = {
