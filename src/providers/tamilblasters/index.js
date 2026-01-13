@@ -47,6 +47,24 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
 }
 
 /**
+ * Checks if a URL is accessible
+ */
+async function checkLink(url, headers = {}) {
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: {
+        ...headers,
+        'Range': 'bytes=0-0'
+      }
+    }, 5000);
+    return response.ok || response.status === 206;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * Converts string to Title Case
  */
 function toTitleCase(str) {
@@ -536,8 +554,13 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
     console.log(`[Tamilblasters] Processing top ${topMatches.length} unique matches out of ${allMatches.length} total`);
 
     const allValidStreams = [];
+    const targetResults = 5;
+    const matchConcurrencyLimit = 2;
+    const matchActiveTasks = new Set();
+    let isTerminated = false;
 
-    for (const match of topMatches) {
+    const processMatch = async (match) => {
+      if (allValidStreams.length >= targetResults || isTerminated) return;
       console.log(`[Tamilblasters] Processing match: ${match.title} -> ${match.href}`);
 
       try {
@@ -545,17 +568,10 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         const pageHtml = await pageResponse.text();
         const $ = cheerio.load(pageHtml);
 
-        // Extract full title from page for better quality/language info
         const fullPageTitle = $("h1.entry-title").text().trim() || match.title;
-
-
-
-
         console.log(`[Tamilblasters] Full Page Title: ${fullPageTitle}`);
 
         const rawStreams = [];
-
-        // Parse match title once for this match
         const matchTitle = match.title;
         const yearMatch = matchTitle.match(/[\(\[](\d{4})[\)\]]/);
         let movieName = matchTitle;
@@ -573,7 +589,6 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
           if (!streamurl || streamurl.includes("google.com") || streamurl.includes("youtube.com"))
             return;
 
-          // Try to find episode label in preceding text
           let episodeLabel = "";
           let current = $(el);
 
@@ -595,7 +610,6 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
 
           let displayLabel = episodeLabel || ($(el).closest("div").prev("p").text().trim()) || "Stream " + (i + 1);
 
-          // Clean up label if it contains "Episode" to make it more concise
           if (displayLabel.toLowerCase().includes("episode")) {
             const epMatch = displayLabel.match(/Episode\s*[–-ー]\s*(\d+)/i) || displayLabel.match(/Episode\s*(\d+)/i);
             if (epMatch) {
@@ -603,7 +617,6 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             }
           }
 
-          // Auto-detect if this is a TV show
           const isTVShow = mediaType === 'tv' ||
             matchTitle.match(/S\d+.*EP/i) ||
             matchTitle.match(/Season.*Episode/i) ||
@@ -632,7 +645,6 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             langStr = langStr.replace(/^[-\s,[\]]+|[-\s,[\]]+$/g, '').trim();
           }
 
-          // Detect type (WEB-DL, BluRay, etc.)
           let type = "UNKNOWN";
           const searchMeta = (fullPageTitle + " " + displayLabel).toLowerCase();
           if (searchMeta.includes('bluray') || searchMeta.includes('brrip')) type = "BluRay";
@@ -650,12 +662,10 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             type,
             url: streamurl,
             label: displayLabel,
-            matchTitle: match.title // Use original match title for better size/quality parsing
+            matchTitle: match.title
           });
         });
 
-        // Extract direct stream URLs from embed hosts
-        // Limit to first 5 iframes for performance
         const limitedStreams = rawStreams.slice(0, 5);
         if (rawStreams.length > 5) {
           console.log(`[Tamilblasters] Limiting to first 5 iframes out of ${rawStreams.length} for performance`);
@@ -663,7 +673,12 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
         console.log(`[Tamilblasters] Extracting direct streams from ${limitedStreams.length} embed URLs for "${match.title}"...`);
 
         const directStreams = [];
-        for (const stream of limitedStreams) {
+        const seenUrls = new Set();
+        const concurrencyLimit = 5;
+        const activeTasks = new Set();
+
+        const itemProcessEmbed = async (stream) => {
+          if (allValidStreams.length >= targetResults || isTerminated) return;
           try {
             const result = await Promise.race([
               extractDirectStream(stream.url),
@@ -675,52 +690,64 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             if (result && result.variants && result.variants.length > 0) {
               const audioInfo = result.audios.length > 0 ? result.audios.join(', ') : "";
 
-              // If it's a master playlist with multiple audios, pick just the master
               if (result.isMaster && result.audios.length > 1) {
-                // Best quality from variants
                 const bestQuality = result.variants[0].quality;
-                directStreams.push({
+                const streamData = {
                   ...stream,
                   url: result.masterUrl,
                   quality: bestQuality,
                   audioInfo: audioInfo,
                   isMaster: true
-                });
+                };
+
+                const isWorking = await checkLink(streamData.url, { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
+                if (isWorking && !seenUrls.has(streamData.url)) {
+                  seenUrls.add(streamData.url);
+                  directStreams.push(streamData);
+                }
               } else {
-                // Otherwise fallback to individual variants
                 for (const variant of result.variants) {
-                  directStreams.push({
+                  const streamData = {
                     ...stream,
                     url: variant.url,
                     quality: variant.quality,
                     audioInfo: audioInfo,
                     isMaster: false
-                  });
+                  };
+
+                  const isWorking = await checkLink(streamData.url, { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
+                  if (isWorking && !seenUrls.has(streamData.url)) {
+                    seenUrls.add(streamData.url);
+                    directStreams.push(streamData);
+                  }
                 }
               }
             }
           } catch (error) {
             console.error(`[Tamilblasters] Failed to extract stream: ${error.message}`);
           }
+        };
+
+        for (const stream of limitedStreams) {
+          if (allValidStreams.length >= targetResults || isTerminated) break;
+          const task = itemProcessEmbed(stream).then(() => activeTasks.delete(task));
+          activeTasks.add(task);
+          if (activeTasks.size >= concurrencyLimit) {
+            await Promise.race(activeTasks);
+          }
         }
+        await Promise.all(activeTasks);
 
-        // Filter out null entries (already handled by loop)
         let validStreams = directStreams;
-
-        // Filter by season and episode if provided OR if we detect TV show patterns
-
-        // Use simpler logic: if the request specifically asks for S/E, we MUST filter.
-        // We also check for mediaType='tv' or pattern matches as a secondary hint but the params are key.
         const shouldFilter = (season !== null || episode !== null);
 
         if (shouldFilter) {
           const reqEpUpper = episode !== null ? `EP${episode.toString().padStart(2, '0')}` : null;
           const reqEpLower = episode !== null ? `e${episode.toString().padStart(2, '0')}` : null;
-          const reqEpSpaced = episode !== null ? `e ${episode.toString().padStart(2, '0')}` : null; // Handle "e 64" format
+          const reqEpSpaced = episode !== null ? `e ${episode.toString().padStart(2, '0')}` : null;
           const reqSeason = season !== null ? `S${season.toString().padStart(2, '0')}` : null;
           const reqSeasonLower = season !== null ? `s${season.toString().padStart(2, '0')}` : null;
 
-          // Check if the current search match is for the right season
           const matchHasCorrectSeason = !reqSeason ||
             match.title.toUpperCase().includes(reqSeason) ||
             match.title.toLowerCase().includes(reqSeasonLower);
@@ -728,17 +755,29 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
           if (matchHasCorrectSeason) {
             const filtered = validStreams.filter(s => {
               if (!reqEpUpper) return true;
-              // Check if the stream title contains the requested episode (multiple formats)
-              const titleUpper = s.title.toUpperCase();
-              const titleLower = s.title.toLowerCase();
-              return titleUpper.includes(reqEpUpper) ||
-                titleLower.includes(reqEpLower) ||
-                titleLower.includes(reqEpSpaced) ||
-                titleUpper.includes(`EPISODE ${episode}`);
+
+              const streamEpInfo = `${s.label} ${s.episodeCode}`.toUpperCase();
+              const hasStreamEp = streamEpInfo.includes('EP') || streamEpInfo.includes('E') || /\d+/.test(s.episodeCode);
+
+              // If stream itself has episode info, trust it explicitly
+              if (hasStreamEp) {
+                const searchStr = streamEpInfo;
+                const searchStrLower = searchStr.toLowerCase();
+                return searchStr.includes(reqEpUpper) ||
+                  searchStrLower.includes(reqEpLower) ||
+                  searchStrLower.includes(reqEpSpaced) ||
+                  searchStr.includes(`EPISODE ${episode}`);
+              } else {
+                // Otherwise fallback to matchTitle but verify it's the requested episode
+                const searchStr = `${s.matchTitle}`.toUpperCase();
+                const searchStrLower = searchStr.toLowerCase();
+                return searchStr.includes(reqEpUpper) ||
+                  searchStrLower.includes(reqEpLower) ||
+                  searchStrLower.includes(reqEpSpaced) ||
+                  searchStr.includes(`EPISODE ${episode}`);
+              }
             });
 
-            // If we are filtering, we should return the filtered results
-            // even if empty (meaning the requested episode wasn't found)
             validStreams = filtered;
 
             if (filtered.length > 0) {
@@ -747,54 +786,86 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
               console.log(`[Tamilblasters] No streams found matching epsiode ${episode}`);
             }
           } else {
-            // Match is for wrong season, skip these streams
             validStreams = [];
           }
         }
 
-        console.log(`[Tamilblasters] Successfully extracted ${validStreams.length} direct streams for "${match.title}"`);
-        allValidStreams.push(...validStreams);
+        if (validStreams.length > 0) {
+          allValidStreams.push(...validStreams);
+        }
 
-        // Early termination if we have enough streams
-        if (allValidStreams.length >= 10) {
-          console.log(`[Tamilblasters] Found ${allValidStreams.length} streams, stopping early`);
-          break;
+        if (allValidStreams.length >= targetResults) {
+          isTerminated = true;
         }
       } catch (innerError) {
         console.error(`[Tamilblasters] Failed to process match ${match.title}:`, innerError.message);
       }
-    }
+    };
 
-    return allValidStreams.map((s) => {
-      const quality = s.quality || "Unknown";
-
-      // Parse size if available in the matchTitle matching this quality
-      let size = "UNKNOWN";
-      if (s.matchTitle && quality !== "Unknown") {
-        // Look for patterns like "1080p [3.7GB]" or "720p (1.2GB)"
-        const qualityPattern = new RegExp(`${quality}\\s*[\\[\\(]([^\\]\\)]+)[\\]\\)]`, 'i');
-        const sizeMatch = s.matchTitle.match(qualityPattern);
-        if (sizeMatch) size = sizeMatch[1].toUpperCase();
+    for (const match of topMatches) {
+      if (allValidStreams.length >= targetResults || isTerminated) break;
+      const task = processMatch(match).then(() => matchActiveTasks.delete(task));
+      matchActiveTasks.add(task);
+      if (matchActiveTasks.size >= matchConcurrencyLimit) {
+        await Promise.race(matchActiveTasks);
       }
+    }
+    await Promise.all(matchActiveTasks);
 
-      const streamObj = {
-        ...s,
-        quality,
-        size
-      };
+    // Final validation of all found streams
+    console.log(`[Tamilblasters] Final validation of ${allValidStreams.length} candidate streams...`);
+    const finalStreams = [];
+    const validationTasks = new Set();
+    const validationConcurrency = 5;
 
-      return {
-        name: "Tamilblasters",
-        title: formatStreamTitle(mediaInfo, streamObj),
-        url: s.url,
-        quality: streamObj.quality,
-        headers: {
-          "Referer": MAIN_URL,
-          "User-Agent": HEADERS["User-Agent"]
-        },
-        provider: 'Tamilblasters'
-      };
-    });
+    const validateAndFormat = async (s) => {
+      try {
+        const isWorking = await checkLink(s.url, { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
+        if (isWorking) {
+          const quality = s.quality || "Unknown";
+
+          // Parse size if available in the matchTitle matching this quality
+          let size = "UNKNOWN";
+          if (s.matchTitle && quality !== "Unknown") {
+            const qualityPattern = new RegExp(`${quality}\\s*[\\[\\(]([^\\]\\)]+)[\\]\\)]`, 'i');
+            const sizeMatch = s.matchTitle.match(qualityPattern);
+            if (sizeMatch) size = sizeMatch[1].toUpperCase();
+          }
+
+          const streamObj = {
+            ...s,
+            quality,
+            size
+          };
+
+          finalStreams.push({
+            name: "Tamilblasters",
+            title: formatStreamTitle(mediaInfo, streamObj),
+            url: s.url,
+            quality: streamObj.quality,
+            headers: {
+              "Referer": MAIN_URL,
+              "User-Agent": HEADERS["User-Agent"]
+            },
+            provider: 'Tamilblasters'
+          });
+        }
+      } catch (err) {
+        console.error(`[Tamilblasters] Validation failed for ${s.url}:`, err.message);
+      }
+    };
+
+    for (const stream of allValidStreams) {
+      const task = validateAndFormat(stream).then(() => validationTasks.delete(task));
+      validationTasks.add(task);
+      if (validationTasks.size >= validationConcurrency) {
+        await Promise.race(validationTasks);
+      }
+    }
+    await Promise.all(validationTasks);
+
+    console.log(`[Tamilblasters] Returning ${finalStreams.length} valid streams out of ${allValidStreams.length} candidates`);
+    return finalStreams;
 
   } catch (error) {
     console.error("[Tamilblasters] getStreams failed:", error.message);
