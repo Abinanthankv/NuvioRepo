@@ -132,7 +132,8 @@
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
-        "tv"
+        "tv",
+        "movie"
       ],
       "filename": "src/providers/animelok.js",
       "enabled": true,

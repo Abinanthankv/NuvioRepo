@@ -35,11 +35,13 @@ async function search(query) {
             const href = $(el).attr('href');
             const poster = $(el).find('img').attr('src');
             if (href && title) {
+                // Robust slug extraction
+                const slug = href.includes('/anime/') ? href.split('/anime/')[1].split('?')[0].split('/')[0] : href.split('/').pop();
                 results.push({
                     title,
-                    id: href.replace('/anime/', ''),
+                    id: slug,
                     poster,
-                    type: 'tv' // Animelok is mostly anime (TV/Movies)
+                    type: 'tv'
                 });
             }
         });
@@ -51,9 +53,60 @@ async function search(query) {
     }
 }
 
+const TMDB_API_KEY = '1b3113663c9004682ed61086cf967c44';
+
+async function getTMDBDetails(id, type, retries = 3) {
+    const url = `https://api.themoviedb.org/3/${type}/${id}?api_key=${TMDB_API_KEY}`;
+    for (let i = 0; i < retries; i++) {
+        try {
+            const res = await fetchWithTimeout(url, {}, 8000);
+            if (!res.ok) throw new Error(`Status ${res.status}`);
+            const data = await res.json();
+            return {
+                title: data.name || data.title,
+                year: (data.release_date || data.first_air_date || '').split('-')[0]
+            };
+        } catch (e) {
+            console.error(`[Animelok] TMDB fetch attempt ${i + 1} failed:`, e.message);
+            if (i === retries - 1) return null;
+            // Wait before retry: 1s, 2s, 3s
+            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
+    }
+    return null;
+}
+
 async function getStreams(id, type, season, episode) {
-    // For Animelok, 'id' is the anime slug (e.g., 'naruto-20')
-    const animeSlug = id;
+    // For Animelok, 'id' can be the anime slug (e.g., 'naruto-20') or a TMDB ID
+    let animeSlug = id;
+
+    if (/^\d+$/.test(id)) {
+        console.log(`[Animelok] numeric ID detected (${id}), fetching TMDB details...`);
+        const details = await getTMDBDetails(id, type);
+        if (details) {
+            console.log(`[Animelok] TMDB Title trace: ${details.title}. Searching on Animelok...`);
+            const searchResults = await search(details.title);
+            if (searchResults.length > 0) {
+                // Try to find a season-specific result if season > 1
+                let match = searchResults[0];
+                if (season > 1) {
+                    const seasonSearch = searchResults.find(r =>
+                        r.title.toLowerCase().includes(`season ${season}`) ||
+                        r.title.toLowerCase().includes(` s${season}`)
+                    );
+                    if (seasonSearch) match = seasonSearch;
+                }
+                animeSlug = match.id;
+                console.log(`[Animelok] Found matching slug: ${animeSlug} for season ${season}`);
+            } else {
+                console.warn(`[Animelok] No search results found for: ${details.title}`);
+                return [];
+            }
+        } else {
+            return [];
+        }
+    }
+
     const apiUrl = `${BASE_URL}/api/anime/${animeSlug}/episodes/${episode}`;
 
     console.log(`Fetching streams for ${animeSlug} episode ${episode} from ${apiUrl}...`);
@@ -117,7 +170,7 @@ async function getStreams(id, type, season, episode) {
             // Handle other direct m3u8 links
             else if (server.url.includes('.m3u8')) {
                 streams.push({
-                    title: formatTitle(data.anime, serverName, 'Auto', season, episode, languages, hasSubtitles),
+                    title: formatTitle(data.anime || data.movie, serverName, 'Auto', season, episode, languages, hasSubtitles),
                     url: server.url,
                     type: 'hls',
                     subtitles
