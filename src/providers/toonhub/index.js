@@ -30,6 +30,21 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
     }
 }
 
+async function checkLink(url, headers = {}) {
+    try {
+        const response = await fetchWithTimeout(url, {
+            method: 'GET',
+            headers: {
+                ...headers,
+                'Range': 'bytes=0-0'
+            }
+        }, 5000);
+        return response.ok || response.status === 206;
+    } catch (error) {
+        return false;
+    }
+}
+
 function normalizeTitle(title) {
     if (!title) return '';
     return title.toLowerCase()
@@ -118,7 +133,7 @@ function extractAudioInfoFromFilename(filename) {
     return audioInfo;
 }
 
-function formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo) {
+function formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo, extraInfo = '') {
     const quality = stream.quality || 'Unknown';
     const title = toTitleCase(mediaInfo.title || 'Unknown');
     const year = mediaInfo.year ? ` (${mediaInfo.year})` : '';
@@ -139,9 +154,52 @@ function formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo) {
         audioLabel = `🎧: ${langs}${subInfo}`;
     }
 
+    const formatInfo = extraInfo ? ` | ${extraInfo}` : '';
+
     return `ToonHub (${quality})
-📹: ${title}${year}${episodeLabel}
-🚜: toonhub | ${audioLabel}`;
+\u{1F4F9}: ${title}${year}${episodeLabel}
+\u{1F69C}: toonhub | ${audioLabel}${formatInfo}`;
+}
+
+function parseFormatFromFilename(filename) {
+    if (!filename) return "";
+    const info = [];
+    if (/x265|hevc|h265|10?bit/i.test(filename)) info.push('H.265');
+    else if (/x264|h264/i.test(filename)) info.push('H.264');
+
+    if (/aac/i.test(filename)) info.push('AAC');
+
+    const extMatch = filename.match(/\.(mkv|mp4|m3u8|avi|webm)(?:\?|$)/i);
+    if (extMatch) info.push(extMatch[1].toUpperCase());
+
+    return info.join('/');
+}
+
+function parseCodecs(codecString) {
+    if (!codecString) return "";
+    const codecs = codecString.split(',').map(c => c.trim().toLowerCase());
+    const info = [];
+
+    for (const codec of codecs) {
+        if (codec.startsWith('avc')) info.push('H.264');
+        else if (codec.startsWith('hev') || codec.startsWith('hvc')) info.push('H.265');
+        else if (codec.startsWith('mp4a')) info.push('AAC');
+    }
+
+    return info.join('/');
+}
+
+async function getHlsFormatInfo(url) {
+    try {
+        const response = await fetchWithTimeout(url, { headers: HEADERS }, 5000);
+        if (!response.ok) return "";
+        const content = await response.text();
+        const codecMatch = content.match(/CODECS="([^"]+)"/i);
+        if (codecMatch) return parseCodecs(codecMatch[1]);
+        return "M3U8";
+    } catch (e) {
+        return "M3U8";
+    }
 }
 
 async function getTMDBDetails(tmdbId, mediaType) {
@@ -470,7 +528,12 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             }
         }
 
-        const searchResults = await searchToonHub(mediaInfo.title);
+        const [toonHubResults, toonStreamResultsFallback] = await Promise.all([
+            searchToonHub(mediaInfo.title),
+            searchToonStream(mediaInfo.title)
+        ]);
+
+        const searchResults = toonHubResults;
         let bestMatch = null;
         let maxScore = 0;
 
@@ -578,127 +641,122 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             });
         }
 
-        // 2. Only search ToonStream if ToonHub page has no links (fallback)
-        if (streams.length === 0) {
-            console.log(`[ToonHub] No links found on ToonHub page, searching ToonStream as fallback...`);
-            let toonStreamResults = await searchToonStream(bestMatch.title);
+        console.log(`[ToonHub] Found ${streams.length} links on ToonHub page`);
 
-            // If no results, try with the original mediaInfo title (simpler)
-            if (toonStreamResults.length === 0 && mediaInfo.title !== bestMatch.title) {
-                toonStreamResults = await searchToonStream(mediaInfo.title);
+        // Add matching ToonStream results if found during parallel search
+        let tsBestMatch = null;
+        let tsMaxScore = 0;
+        for (const res of toonStreamResultsFallback) {
+            const score = calculateTitleSimilarity(bestMatch?.title || mediaInfo.title, res.title);
+            const finalScore = score + (res.type === 'series' ? 0.1 : 0);
+
+            if (finalScore > tsMaxScore) {
+                tsMaxScore = finalScore;
+                tsBestMatch = res;
             }
-
-            let tsBestMatch = null;
-            let tsMaxScore = 0;
-            for (const res of toonStreamResults) {
-                const score = calculateTitleSimilarity(bestMatch.title, res.title);
-                const score2 = calculateTitleSimilarity(mediaInfo.title, res.title);
-                let finalScore = Math.max(score, score2);
-
-                // Boost series for TV/Anime
-                if (res.type === 'series') finalScore += 0.1;
-
-                console.log(`[ToonHub] ToonStream Compare: "${bestMatch.title}" vs "${res.title}" (${res.type}) - Score: ${finalScore.toFixed(2)}`);
-
-                if (finalScore > tsMaxScore) {
-                    tsMaxScore = finalScore;
-                    tsBestMatch = res;
-                }
-            }
-
-            if (tsBestMatch && tsMaxScore > 0.45) {
-                console.log(`[ToonHub] Found matching series on ToonStream: ${tsBestMatch.title} (${tsBestMatch.type}, score: ${tsMaxScore.toFixed(2)})`);
-                // If the search result itself is an episode page, use it directly
-                let tsEpisodeUrl = tsBestMatch.type === 'episode' ? tsBestMatch.href : await getToonStreamEpisodes(tsBestMatch.href, episode || 1);
-
-                if (tsEpisodeUrl) {
-                    console.log(`[ToonHub] Found direct ToonStream episode link: ${tsEpisodeUrl}`);
-                    streams.push({ url: tsEpisodeUrl, quality: 'HD', label: `Episode ${episode}` });
-                }
-            }
-        } else {
-            console.log(`[ToonHub] Found ${streams.length} links on ToonHub page, skipping ToonStream search`);
         }
+
+        if (tsBestMatch && tsMaxScore > 0.45 && streams.length < 5) {
+            console.log(`[ToonHub] Adding ToonStream result as additional candidate: ${tsBestMatch.title}`);
+            let tsEpisodeUrl = tsBestMatch.type === 'episode' ? tsBestMatch.href : await getToonStreamEpisodes(tsBestMatch.href, episode || 1);
+            if (tsEpisodeUrl) {
+                streams.push({ url: tsEpisodeUrl, quality: 'HD', label: `Episode ${episode}` });
+            }
+        }
+
+        // --- Optimization: Priority Sorting ---
+        // Prioritize gdmirrorbot and direct HLS/MP4 links as they are faster to resolve
+        streams.sort((a, b) => {
+            const getPriority = (url) => {
+                if (url.includes('gdmirrorbot') || url.includes('as-cdn21.top')) return 1;
+                if (url.includes('google.com/drive')) return 2;
+                if (url.includes('toonstream')) return 3;
+                return 4;
+            };
+            return getPriority(a.url) - getPriority(b.url);
+        });
 
         const finalResults = [];
         const seenUrls = new Set();
-        let matchingStreamsFound = 0;
+        let matchingStreamsCount = 0;
 
-        // Process streams in parallel batches for better performance
-        const batchSize = 5; // Process 5 streams at a time
-        for (let i = 0; i < streams.length; i += batchSize) {
-            const batch = streams.slice(i, i + batchSize);
+        // --- Optimization: Fast Parallel Pool ---
+        const concurrencyLimit = 10;
+        const targetResults = 5;
+        const streamTasks = [];
 
-            // Process batch in parallel
-            const batchResults = await Promise.all(
-                batch.map(async (stream) => {
-                    if (seenUrls.has(stream.url)) return null;
-                    seenUrls.add(stream.url);
+        // Helper to process a single stream
+        const processStream = async (stream) => {
+            if (seenUrls.has(stream.url) || matchingStreamsCount >= targetResults) return null;
+            seenUrls.add(stream.url);
 
-                    try {
-                        const finalUrl = await extractDirectStream(stream.url);
-                        if (!finalUrl) return null;
+            try {
+                const finalUrl = await extractDirectStream(stream.url);
+                if (!finalUrl || matchingStreamsCount >= targetResults) return null;
 
-                        // Extract season/episode info from the filename in the URL
-                        const filenameMatch = finalUrl.match(/name=([^&]+)/);
-                        let seasonEpInfo = null;
-                        let audioInfo = null;
-                        let shouldInclude = true;
+                const filenameMatch = finalUrl.match(/name=([^&]+)/);
+                let seasonEpInfo = null;
+                let audioInfo = null;
+                let shouldInclude = true;
 
-                        if (filenameMatch) {
-                            // Properly decode URL (replace + with space, then decode)
-                            const filename = decodeURIComponent(filenameMatch[1].replace(/\+/g, ' '));
-                            // Only extract season/episode info for TV shows, not movies
-                            seasonEpInfo = mediaType === 'tv' ? extractSeasonEpisodeFromFilename(filename) : null;
-                            audioInfo = extractAudioInfoFromFilename(filename);
+                if (filenameMatch) {
+                    const filename = decodeURIComponent(filenameMatch[1].replace(/\+/g, ' '));
+                    seasonEpInfo = mediaType === 'tv' ? extractSeasonEpisodeFromFilename(filename) : null;
+                    audioInfo = extractAudioInfoFromFilename(filename);
 
-                            // Filter: only include if it matches the requested season/episode (for TV shows)
-                            if (mediaType === 'tv' && season && episode && seasonEpInfo) {
-                                if (seasonEpInfo.season !== season || seasonEpInfo.episode !== episode) {
-                                    console.log(`[ToonHub] Filtering out S${String(seasonEpInfo.season).padStart(2, '0')}E${String(seasonEpInfo.episode).padStart(2, '0')} (requested S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')})`);
-                                    shouldInclude = false;
-                                }
-                            }
+                    if (mediaType === 'tv' && season && episode && seasonEpInfo) {
+                        if (seasonEpInfo.season !== season || seasonEpInfo.episode !== episode) {
+                            shouldInclude = false;
                         }
-
-                        if (shouldInclude) {
-                            return {
-                                name: 'ToonHub',
-                                title: formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo),
-                                url: finalUrl,
-                                quality: stream.quality,
-                                headers: { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] },
-                                provider: 'ToonHub',
-                                isMatch: seasonEpInfo && seasonEpInfo.season === season && seasonEpInfo.episode === episode
-                            };
-                        }
-                        return null;
-                    } catch (error) {
-                        console.warn(`[ToonHub] Error processing stream: ${error.message}`);
-                        return null;
                     }
-                })
-            );
-
-            // Add valid results to finalResults
-            for (const result of batchResults) {
-                if (result) {
-                    finalResults.push(result);
-                    if (result.isMatch) {
-                        matchingStreamsFound++;
-                    }
-                    delete result.isMatch; // Remove temporary flag
                 }
-            }
 
-            // Early exit: if we have enough matching streams for the requested episode, stop processing
-            if (mediaType === 'tv' && matchingStreamsFound >= 3) {
-                console.log(`[ToonHub] Found ${matchingStreamsFound} streams for requested episode, stopping early`);
-                break;
-            }
+                if (shouldInclude && matchingStreamsCount < targetResults) {
+                    let extraInfo = "";
+                    if (filenameMatch) {
+                        const filename = decodeURIComponent(filenameMatch[1].replace(/\+/g, ' '));
+                        extraInfo = parseFormatFromFilename(filename);
+                    } else if (finalUrl.includes('.m3u8')) {
+                        extraInfo = await getHlsFormatInfo(finalUrl);
+                    }
 
-            if (finalResults.length >= 10) break;
+                    const streamObj = {
+                        name: 'ToonHub',
+                        title: formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo, extraInfo),
+                        url: finalUrl,
+                        quality: stream.quality,
+                        headers: { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] },
+                        provider: 'ToonHub'
+                    };
+
+                    const isWorking = await checkLink(streamObj.url, streamObj.headers);
+                    if (isWorking && matchingStreamsCount < targetResults) {
+                        matchingStreamsCount++;
+                        return streamObj;
+                    }
+                }
+                return null;
+            } catch (error) {
+                return null;
+            }
+        };
+
+        // Run extraction with concurrency limit
+        const activeTasks = new Set();
+        for (const stream of streams) {
+            if (matchingStreamsCount >= targetResults) break;
+
+            const task = processStream(stream).then(res => {
+                if (res) finalResults.push(res);
+                activeTasks.delete(task);
+            });
+
+            activeTasks.add(task);
+            if (activeTasks.size >= concurrencyLimit) {
+                await Promise.race(activeTasks);
+            }
         }
+        await Promise.all(activeTasks);
 
         return finalResults;
     } catch (error) {
