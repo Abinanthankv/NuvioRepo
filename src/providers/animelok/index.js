@@ -262,7 +262,8 @@ function formatTitle(animeInfo, serverName, quality, season, episode, languages,
     // Animelok [Server] (Quality)
     // 📹: Title - S01 E01
     // 🚜: animelok | 🎧: Languages [| ExtraInfo]
-    return `Animelok [${serverName}] (${quality || 'Auto'})
+    const qLabel = quality ? ` - ${quality}` : '';
+    return `Animelok${qLabel} [${serverName}]
 \u{1F4F9}: ${title}${epLabel}
 \u{1F69C}: animelok | \u{1F3A7}: ${langStr}${extraInfo}`;
 }
