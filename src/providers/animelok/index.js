@@ -155,7 +155,7 @@ async function getStreams(id, type, season, episode) {
                     if (stream) {
                         const quality = stream.quality || 'Auto';
                         stream.quality = quality;
-                        stream.name = `AnimeLok - ${quality}`;
+                        stream.name = `AnimeLok - ${serverName} - ${quality}`;
                         stream.subtitles = subtitles;
                         stream.headers = {
                             ...commonHeaders,
@@ -173,9 +173,9 @@ async function getStreams(id, type, season, episode) {
                         let url = source.url;
                         const quality = source.quality || 'Auto';
                         streams.push({
-                            name: `AnimeLok - ${quality}`,
+                            name: `AnimeLok - ${serverName} - ${quality}`,
                             quality: quality,
-                            title: formatTitle(data.anime || data.movie, serverName, quality, season, episode, languages, hasSubtitles),
+                            title: formatTitle(data.anime || data.movie, quality, season, episode, languages, hasSubtitles),
                             url: url,
                             type: 'hls',
                             headers: commonHeaders,
@@ -190,9 +190,9 @@ async function getStreams(id, type, season, episode) {
             else if (server.url.includes('.m3u8')) {
                 let masterUrl = server.url;
                 streams.push({
-                    name: 'AnimeLok - Auto',
+                    name: `AnimeLok - ${serverName} - Auto`,
                     quality: 'Auto',
-                    title: formatTitle(data.anime || data.movie, serverName, 'Auto', season, episode, languages, hasSubtitles),
+                    title: formatTitle(data.anime || data.movie, 'Auto', season, episode, languages, hasSubtitles),
                     url: masterUrl,
                     type: 'hls',
                     headers: commonHeaders,
@@ -207,9 +207,9 @@ async function getStreams(id, type, season, episode) {
                             let vUrl = variant.url;
                             const extraInfo = variant.extraInfo ? ` | ${variant.extraInfo}` : '';
                             streams.push({
-                                name: `AnimeLok - ${variant.quality}`,
+                                name: `AnimeLok - ${serverName} - ${variant.quality}`,
                                 quality: variant.quality,
-                                title: formatTitle(data.anime || data.movie, serverName, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
+                                title: formatTitle(data.anime || data.movie, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
                                 url: vUrl,
                                 type: 'hls',
                                 headers: commonHeaders,
@@ -248,9 +248,9 @@ async function extractAsCdnStream(videoId, serverName, animeInfo, season, episod
         const data = await response.json();
         if (data && data.videoSource) {
             return {
-                name: 'AnimeLok - Auto',
+                name: `AnimeLok - ${serverName} - Auto`,
                 quality: 'Auto',
-                title: formatTitle(animeInfo, serverName, 'Auto', season, episode, languages, hasSubtitles),
+                title: formatTitle(animeInfo, 'Auto', season, episode, languages, hasSubtitles),
                 url: data.videoSource,
                 type: 'hls'
             };
@@ -261,7 +261,7 @@ async function extractAsCdnStream(videoId, serverName, animeInfo, season, episod
     return null;
 }
 
-function formatTitle(animeInfo, serverName, quality, season, episode, languages, hasSubtitles, extraInfo = '') {
+function formatTitle(animeInfo, quality, season, episode, languages, hasSubtitles, extraInfo = '') {
     const title = (animeInfo && animeInfo.title) ? animeInfo.title : 'Unknown';
     const s = String(season || 1).padStart(2, '0');
     const e = String(episode || 1).padStart(2, '0');
@@ -273,10 +273,10 @@ function formatTitle(animeInfo, serverName, quality, season, episode, languages,
     // ToonHub style format:
     // Animelok (Quality)
     // 📹: Title - S01 E01
-    // 🚜: animelok | 🎧: Languages [| ExtraInfo]
-    return `Animelok (${quality}) [${serverName}]
+    // 🎧: Languages [| ExtraInfo]
+    return `Animelok (${quality})
 \u{1F4F9}: ${title}${epLabel}
-\u{1F69C}: animelok | \u{1F3A7}: ${langStr}${extraInfo}`;
+\u{1F3A7}: ${langStr}${extraInfo}`;
 }
 
 function parseCodecs(codecString) {

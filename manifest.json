@@ -13,6 +13,7 @@
       ],
       "filename": "src/providers/tamilmv.js",
       "enabled": true,
+      "logo": "https://www.1tamilmv.band/uploads/monthly_2025_02/logo.png.bcc33561bc1d7345f7c6237a80238992.png",
       "contentLanguage": [
         "ta",
         "en"
@@ -31,6 +32,7 @@
       ],
       "filename": "src/providers/tamilblasters.js",
       "enabled": true,
+      "logo": "https://1tamilblasters.bz/uploads/monthly_2025_10/169356039_TBLwhitelogo.png.50e3c98229dab88b167074a68df15caf.png",
       "contentLanguage": [
         "ta",
         "en"
@@ -119,6 +121,7 @@
       ],
       "filename": "src/providers/toonhub.js",
       "enabled": true,
+      "logo": "https://toonhub4u.co/wp-content/uploads/2024/02/Untitled.png",
       "contentLanguage": [
         "hi",
         "en"

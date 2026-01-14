@@ -113,16 +113,9 @@ function formatTitle(mediaInfo, serverName, quality, season, episode, size = '',
     const epLabel = season ? ` - S${s} E${e}` : (mediaInfo.year ? ` (${mediaInfo.year})` : '');
 
     let titleStr = `XDmovies (${quality}) [${serverName}]
-\u{1F4F9}: ${title}${epLabel}
-\u{1F69C}: xdmovies`;
+\u{1F4F9}: ${title}${epLabel}`;
 
-    if (size && size !== '0 B') {
-        titleStr += ` | \u{1F4BE}: ${size}`;
-    }
 
-    if (metadata && metadata !== 'Unknown') {
-        titleStr += ` | \u{1F3A7}: ${metadata}`;
-    }
 
     return titleStr;
 }

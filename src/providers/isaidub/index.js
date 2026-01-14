@@ -195,7 +195,7 @@ function formatStreamTitle(mediaInfo, stream) {
     }
 
     const typeLine = type ? `📹: ${type}\n` : "";
-    const sizeLine = size ? `💾: ${size} | 🚜: isaidub\n` : "";
+    const sizeLine = size ? `💾: ${size}\n` : "";
     const yearStr = year && year !== "N/A" ? ` ${year}` : "";
 
     const langMarkers = {

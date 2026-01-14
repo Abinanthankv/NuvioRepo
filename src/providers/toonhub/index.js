@@ -158,7 +158,7 @@ function formatStreamTitle(mediaInfo, stream, seasonEpInfo, audioInfo, extraInfo
 
     return `ToonHub (${quality})
 \u{1F4F9}: ${title}${year}${episodeLabel}
-\u{1F69C}: toonhub | ${audioLabel}${formatInfo}`;
+${audioLabel}${formatInfo}`;
 }
 
 function parseFormatFromFilename(filename) {
