@@ -5,15 +5,15 @@
     {
       "id": "tamilmv",
       "name": "TamilMV",
-      "description": "TamilMV provider for Nuvio. Uses direct links from the homepage.",
+      "description": "TamilMV provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
-        "movie",
-        "tv"
+        "movie"
       ],
       "filename": "src/providers/tamilmv.js",
       "enabled": true,
+      "logo": "https://www.1tamilmv.band/uploads/monthly_2025_02/logo.png.bcc33561bc1d7345f7c6237a80238992.png",
       "contentLanguage": [
         "ta",
         "en"
@@ -23,7 +23,7 @@
     {
       "id": "tamilblasters",
       "name": "Tamilblasters",
-      "description": "Tamilblasters provider for Nuvio. Uses search-based forum scraping.",
+      "description": "Tamilblasters provider for Nuvio.",
       "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
@@ -32,6 +32,7 @@
       ],
       "filename": "src/providers/tamilblasters.js",
       "enabled": true,
+      "logo": "https://1tamilblasters.bz/uploads/monthly_2025_10/169356039_TBLwhitelogo.png.50e3c98229dab88b167074a68df15caf.png",
       "contentLanguage": [
         "ta",
         "en"
@@ -41,7 +42,7 @@
     {
       "id": "tamilian",
       "name": "Tamilian",
-      "description": "Tamilian provider for Nuvio. Uses direct high-quality streams.",
+      "description": "Tamilian provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -58,7 +59,7 @@
     {
       "id": "moviesda",
       "name": "Moviesda",
-      "description": "Moviesda provider for Nuvio. Uses multi-level extraction for direct MP4 streams.",
+      "description": "Moviesda provider for Nuvio.",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -75,7 +76,7 @@
     {
       "id": "movies4u",
       "name": "Movies4u",
-      "description": "Movies4u provider for Nuvio. Features Packer deobfuscation and HLS master resolution.",
+      "description": "Movies4u provider for Nuvio.",
       "version": "1.0.1",
       "author": "User",
       "supportedTypes": [
@@ -93,7 +94,7 @@
     {
       "id": "isaidub",
       "name": "Isaidub",
-      "description": "Isaidub provider for Nuvio. Extracted from isaidub.love with multi-level scraping.",
+      "description": "Isaidub provider for Nuvio",
       "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
@@ -105,6 +106,88 @@
       "contentLanguage": [
         "ta",
         "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "toonhub",
+      "name": "ToonHub",
+      "description": "ToonHub provider for Nuvio (Animes & Cartoons)",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/toonhub.js",
+      "enabled": true,
+      "logo": "https://toonhub4u.co/wp-content/uploads/2024/02/Untitled.png",
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "animelok",
+      "name": "Animelok",
+      "description": "Animelok provider for Nuvio (Anime in multiple languages)",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "src/providers/animelok.js",
+      "enabled": true,
+      "logo": "https://animelok.to/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Flogo.5c53cc50.png\u0026w=384\u0026q=75",
+      "contentLanguage": [
+        "hi",
+        "ta",
+        "te",
+        "ml",
+        "en",
+        "ja"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "xdmovies",
+      "name": "XDmovies",
+      "description": "XDmovies provider for Nuvio (Movies and TV Shows)",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/xdmovies.js",
+      "enabled": true,
+      "logo": "https://xdmovies.site/assets/logo1.png",
+      "contentLanguage": [
+        "en",
+        "hi"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "dramafull",
+      "name": "DramaFull",
+      "description": "DramaFull provider for Nuvio. Specializes in Asian dramas.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/dramafull.js",
+      "enabled": true,
+      "logo": "https://dramafull.cc/favicon.ico",
+      "contentLanguage": [
+        "en",
+        "ko",
+        "zh",
+        "ja"
       ],
       "supportsExternalPlayer": true
     }

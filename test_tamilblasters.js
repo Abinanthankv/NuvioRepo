@@ -16,7 +16,7 @@ async function test() {
             streams.forEach((stream, index) => {
                 console.log(`\nStream ${index + 1}:`);
                 console.log(stream.title);
-                console.log(`URL: ${stream.url.substring(0, 100)}...`);
+                console.log(`URL: ${stream.url}`);
             });
             console.log(`\n✅ Success: Found ${streams.length} streams.`);
         } else {
