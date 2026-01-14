@@ -137,6 +137,7 @@
       ],
       "filename": "src/providers/animelok.js",
       "enabled": true,
+      "logo": "https://animelok.to/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Flogo.5c53cc50.png&w=384&q=75",
       "contentLanguage": [
         "hi",
         "ta",
@@ -159,6 +160,7 @@
       ],
       "filename": "src/providers/xdmovies.js",
       "enabled": true,
+      "logo": "https://xdmovies.site/assets/logo1.png",
       "contentLanguage": [
         "en",
         "hi"
