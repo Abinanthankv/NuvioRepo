@@ -173,25 +173,6 @@
     {
       "id": "dramafull",
       "name": "DramaFull",
-      "description": "DramaFull provider for Nuvio (Movies and TV Shows)",
-      "version": "1.0.0",
-      "author": "User",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "filename": "src/providers/dramafull.js",
-      "enabled": true,
-      "logo": "https://dramafull.cc/favicon.ico",
-      "contentLanguage": [
-        "en",
-        "hi"
-      ],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "dramafull",
-      "name": "DramaFull",
       "description": "DramaFull provider for Nuvio. Specializes in Asian dramas.",
       "version": "1.0.0",
       "author": "User",
