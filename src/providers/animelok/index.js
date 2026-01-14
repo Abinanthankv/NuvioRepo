@@ -169,6 +169,7 @@ async function getStreams(id, type, season, episode) {
                     for (const source of sources) {
                         let url = source.url;
                         streams.push({
+
                             title: formatTitle(data.anime || data.movie, serverName, source.quality || 'Auto', season, episode, languages, hasSubtitles),
                             url: url,
                             type: 'hls',
@@ -184,6 +185,7 @@ async function getStreams(id, type, season, episode) {
             else if (server.url.includes('.m3u8')) {
                 let masterUrl = server.url;
                 streams.push({
+                    name: 'AnimeLok',
                     title: formatTitle(data.anime || data.movie, serverName, 'Auto', season, episode, languages, hasSubtitles),
                     url: masterUrl,
                     type: 'hls',
@@ -199,6 +201,7 @@ async function getStreams(id, type, season, episode) {
                             let vUrl = variant.url;
                             const extraInfo = variant.extraInfo ? ` | ${variant.extraInfo}` : '';
                             streams.push({
+                                name: 'AnimeLok',
                                 title: formatTitle(data.anime || data.movie, serverName, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
                                 url: vUrl,
                                 type: 'hls',
