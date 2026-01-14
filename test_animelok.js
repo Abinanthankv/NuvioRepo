@@ -97,6 +97,7 @@ async function runTest(query, type = 'tv', season = 1, episode = 1) {
     console.log(`\nFound ${validStreams.length} working stream(s):`);
     validStreams.forEach((s, i) => {
         console.log(`${i + 1}. ${s.title}`);
+        console.log(`   Name: ${s.name} | Quality: ${s.quality}`);
         console.log(`   URL: ${s.url}`);
         if (s.subtitles && s.subtitles.length > 0) {
             console.log(`   Subtitles: ${s.subtitles.length} tracks found`);

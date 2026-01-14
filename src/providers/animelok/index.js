@@ -153,6 +153,9 @@ async function getStreams(id, type, season, episode) {
                     const videoId = videoIdMatch[1];
                     const stream = await extractAsCdnStream(videoId, serverName, data.anime || data.movie, season, episode, languages, hasSubtitles);
                     if (stream) {
+                        const quality = stream.quality || 'Auto';
+                        stream.quality = quality;
+                        stream.name = `AnimeLok - ${quality}`;
                         stream.subtitles = subtitles;
                         stream.headers = {
                             ...commonHeaders,
@@ -168,9 +171,11 @@ async function getStreams(id, type, season, episode) {
                     const sources = JSON.parse(server.url);
                     for (const source of sources) {
                         let url = source.url;
+                        const quality = source.quality || 'Auto';
                         streams.push({
-
-                            title: formatTitle(data.anime || data.movie, serverName, source.quality || 'Auto', season, episode, languages, hasSubtitles),
+                            name: `AnimeLok - ${quality}`,
+                            quality: quality,
+                            title: formatTitle(data.anime || data.movie, serverName, quality, season, episode, languages, hasSubtitles),
                             url: url,
                             type: 'hls',
                             headers: commonHeaders,
@@ -185,7 +190,8 @@ async function getStreams(id, type, season, episode) {
             else if (server.url.includes('.m3u8')) {
                 let masterUrl = server.url;
                 streams.push({
-                    name: 'AnimeLok',
+                    name: 'AnimeLok - Auto',
+                    quality: 'Auto',
                     title: formatTitle(data.anime || data.movie, serverName, 'Auto', season, episode, languages, hasSubtitles),
                     url: masterUrl,
                     type: 'hls',
@@ -201,7 +207,8 @@ async function getStreams(id, type, season, episode) {
                             let vUrl = variant.url;
                             const extraInfo = variant.extraInfo ? ` | ${variant.extraInfo}` : '';
                             streams.push({
-                                name: 'AnimeLok',
+                                name: `AnimeLok - ${variant.quality}`,
+                                quality: variant.quality,
                                 title: formatTitle(data.anime || data.movie, serverName, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
                                 url: vUrl,
                                 type: 'hls',
@@ -241,6 +248,8 @@ async function extractAsCdnStream(videoId, serverName, animeInfo, season, episod
         const data = await response.json();
         if (data && data.videoSource) {
             return {
+                name: 'AnimeLok - Auto',
+                quality: 'Auto',
                 title: formatTitle(animeInfo, serverName, 'Auto', season, episode, languages, hasSubtitles),
                 url: data.videoSource,
                 type: 'hls'
