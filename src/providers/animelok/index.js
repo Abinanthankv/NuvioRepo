@@ -259,11 +259,10 @@ function formatTitle(animeInfo, serverName, quality, season, episode, languages,
     if (hasSubtitles) langStr += ' + ESub';
 
     // ToonHub style format:
-    // Animelok [Server] (Quality)
+    // Animelok (Quality)
     // 📹: Title - S01 E01
     // 🚜: animelok | 🎧: Languages [| ExtraInfo]
-    const qLabel = quality ? ` - ${quality}` : '';
-    return `Animelok${qLabel} [${serverName}]
+    return `Animelok (${quality}) [${serverName}]
 \u{1F4F9}: ${title}${epLabel}
 \u{1F69C}: animelok | \u{1F3A7}: ${langStr}${extraInfo}`;
 }
