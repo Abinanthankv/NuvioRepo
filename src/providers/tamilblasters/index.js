@@ -197,28 +197,58 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
   console.log(`[Tamilblasters] 🚀 Starting High-Speed Fetch for ${mediaType}: ${tmdbId}`);
 
   try {
-    // 1. Parallel Discovery (TMDB + Site Search)
-    const [mediaInfo, searchResults] = await Promise.all([
-      (async () => {
-        if (!isNumeric) return { title: targetTitle, year: null };
-        const res = await fetchWithTimeout(`${TMDB_BASE_URL}/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?api_key=${TMDB_API_KEY}`);
-        const data = await res.json();
-        return { title: data.title || data.name, year: (data.release_date || data.first_air_date || "").split("-")[0] };
-      })(),
-      (async () => {
-        const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(targetTitle || tmdbId)}`;
-        const res = await fetchWithTimeout(searchUrl, { headers: HEADERS });
-        const html = await res.text();
-        const $ = cheerio.load(html);
-        const results = [];
-        $(".posts-wrapper article, .nv-index-posts article").each((i, el) => {
-          const a = $(el).find("h2.entry-title a");
-          results.push({ title: a.text().trim(), href: a.attr("href") });
-        });
-        console.log(`[Tamilblasters] Found ${results.length} search results`);
-        return results;
-      })()
-    ]);
+    // 1. Resolve Media Info (TMDB Lookup with Retry)
+    let mediaInfo;
+    if (isNumeric) {
+      let attempts = 0;
+      while (attempts < 3) {
+        try {
+          const res = await fetchWithTimeout(`${TMDB_BASE_URL}/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?api_key=${TMDB_API_KEY}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          mediaInfo = {
+            title: data.title || data.name,
+            year: (data.release_date || data.first_air_date || "").split("-")[0]
+          };
+          console.log(`[Tamilblasters] TMDB Resolved: ${mediaInfo.title} (${mediaInfo.year})`);
+          break;
+        } catch (error) {
+          attempts++;
+          console.log(`[Tamilblasters] TMDB Attempt ${attempts} failed: ${error.message}`);
+          if (attempts < 3) await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+      if (!mediaInfo) {
+        console.log(`[Tamilblasters] TMDB Failed after 3 attempts, falling back.`);
+        mediaInfo = { title: tmdbId, year: null };
+      }
+    } else {
+      mediaInfo = { title: tmdbId, year: null };
+    }
+
+    // 2. Site Search using Resolved Title
+    const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(mediaInfo.title)}`;
+    const res = await fetchWithTimeout(searchUrl, { headers: HEADERS });
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const searchResults = [];
+    $(".posts-wrapper article, .nv-index-posts article").each((i, el) => {
+      const a = $(el).find("h2.entry-title a");
+      if (a.length) searchResults.push({ title: a.text().trim(), href: a.attr("href") });
+    });
+
+    // Fallback: If 0 results for TMDB title, try the numeric ID just in case
+    if (searchResults.length === 0 && isNumeric) {
+      console.log(`[Tamilblasters] 0 results for title, trying numeric search...`);
+      const resId = await fetchWithTimeout(`${MAIN_URL}/?s=${tmdbId}`, { headers: HEADERS });
+      const htmlId = await resId.text();
+      const $Id = cheerio.load(htmlId);
+      $(".posts-wrapper article, .nv-index-posts article").each((i, el) => {
+        const a = $Id(el).find("h2.entry-title a");
+        if (a.length) searchResults.push({ title: a.text().trim(), href: a.attr("href") });
+      });
+    }
+    console.log(`[Tamilblasters] Found ${searchResults.length} search results`);
 
     // 2. High-Precision Matching
     const matches = searchResults.filter(r => {
@@ -308,9 +338,9 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             }
           }
 
-          // Final detected values for Title
-          const detectedS = labelS;
-          const detectedE = labelE;
+          // Final detected values for Title - Fallback to requested if matched via range
+          const finalS = labelS !== null ? labelS : season;
+          const finalE = labelE !== null ? labelE : episode;
 
           const result = await UniversalExtractor.extract(s.url);
           if (!result) return;
@@ -324,11 +354,11 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
               // Extract the clean title part (e.g., "The Clash of Paths" from "Episode 01 – The Clash of Paths")
               let epSubtitle = s.label.replace(/^(?:Episode|EP|S\d+E\d+)\s*\d*\s*[–-]?\s*/i, '').trim();
 
-              if (detectedS !== null && detectedE !== null) {
-                infoLine += ` - S${detectedS} E${detectedE}`;
+              if (finalS !== null && finalE !== null) {
+                infoLine += ` - S${finalS} E${finalE}`;
                 if (epSubtitle && epSubtitle !== s.label && epSubtitle.length > 0) infoLine += ` - ${epSubtitle}`;
-              } else if (detectedE !== null) {
-                infoLine += ` - Episode ${detectedE}`;
+              } else if (finalE !== null) {
+                infoLine += ` - Episode ${finalE}`;
                 if (epSubtitle && epSubtitle !== s.label && epSubtitle.length > 0) infoLine += ` - ${epSubtitle}`;
               } else {
                 infoLine += ` - ${s.label}`;
@@ -357,4 +387,10 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
   }
 }
 
-module.exports = { getStreams };
+// Export the main function
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { getStreams };
+} else {
+  // For React Native environment
+  global.getStreams = { getStreams };
+}
