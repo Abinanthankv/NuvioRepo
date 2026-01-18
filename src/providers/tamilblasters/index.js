@@ -847,7 +847,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
               "Referer": MAIN_URL,
               "User-Agent": HEADERS["User-Agent"]
             },
-            provider: 'Tamilblasters'
+            provider: 'tamilblasters'
           });
         }
       } catch (err) {
