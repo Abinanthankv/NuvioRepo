@@ -19,6 +19,24 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
     }
 }
 
+function normalizeTitle(title) {
+    return (title || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function calculateSimilarity(title1, title2) {
+    const n1 = normalizeTitle(title1);
+    const n2 = normalizeTitle(title2);
+    if (n1 === n2) return 1.0;
+    if (n1.includes(n2) || n2.includes(n1)) return 0.9;
+    const w1 = new Set(n1.split(/\s+/).filter(w => w.length > 2));
+    const w2 = new Set(n2.split(/\s+/).filter(w => w.length > 2));
+    if (w1.size === 0 || w2.size === 0) return 0;
+    const intersection = new Set([...w1].filter(w => w2.has(w)));
+    const union = new Set([...w1, ...w2]);
+    return intersection.size / union.size;
+}
+
+
 async function search(query) {
     console.log(`[Animelok] Searching for: ${query}`);
     try {
@@ -86,26 +104,50 @@ async function getStreams(id, type, season, episode) {
         if (details) {
             console.log(`[Animelok] TMDB Title trace: ${details.title}. Searching on Animelok...`);
             const searchResults = await search(details.title);
-            if (searchResults.length > 0) {
+
+            // Filter using similarity
+            const bestMatch = searchResults.find(r => calculateSimilarity(details.title, r.title) >= 0.4);
+
+            if (bestMatch) {
                 // Try to find a season-specific result if season > 1
-                let match = searchResults[0];
+                let match = bestMatch;
+
+                // If we have multiple results, check for season specific ones amongst them
+                // But first, let's see if we have better candidates in the whole result set
+                const allGoodMatches = searchResults.filter(r => calculateSimilarity(details.title, r.title) >= 0.4);
+
                 if (season > 1) {
-                    const seasonSearch = searchResults.find(r =>
+                    const seasonSearch = allGoodMatches.find(r =>
                         r.title.toLowerCase().includes(`season ${season}`) ||
-                        r.title.toLowerCase().includes(` s${season}`)
+                        r.title.toLowerCase().includes(` s${season}`) ||
+                        r.title.toLowerCase().includes(` ${season}nd season`) ||
+                        r.title.toLowerCase().includes(` ${season}rd season`) ||
+                        r.title.toLowerCase().includes(` ${season}th season`)
                     );
                     if (seasonSearch) match = seasonSearch;
                 }
+
+                // If match title is significantly different from query and low score, double check? 
+                // Using 0.4 threshold above should prevent complete mismatches like "Pitt" vs "Cockpit"
+
                 animeSlug = match.id;
-                console.log(`[Animelok] Found matching slug: ${animeSlug} for season ${season}`);
+                console.log(`[Animelok] Found matching slug: ${animeSlug} (Title: ${match.title})`);
             } else {
-                console.warn(`[Animelok] No search results found for: ${details.title}`);
+                console.warn(`[Animelok] No good match found for: ${details.title}`);
+                if (searchResults.length > 0) {
+                    console.log(`[Animelok] Closest found was: ${searchResults[0].title} (Score: ${calculateSimilarity(details.title, searchResults[0].title).toFixed(2)})`);
+                }
                 return [];
             }
         } else {
             return [];
         }
     }
+
+    // Double check if id was passed as string but looks like a bad match?
+    // Usually if passed as string we assume caller knows the slug. 
+    // But here we are mostly handling the TMDB ID flow.
+
 
     const apiUrl = `${BASE_URL}/api/anime/${animeSlug}/episodes/${episode}`;
 

@@ -57,10 +57,36 @@ async function runTest(query, type = 'tv', season = 1, episode = 1) {
             return;
         }
 
+        // Helper for similarity
+        function normalizeTitle(title) {
+            return (title || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+        }
+
+        function calculateSimilarity(title1, title2) {
+            const n1 = normalizeTitle(title1);
+            const n2 = normalizeTitle(title2);
+            if (n1 === n2) return 1.0;
+            if (n1.includes(n2) || n2.includes(n1)) return 0.9;
+            const w1 = new Set(n1.split(/\s+/).filter(w => w.length > 2));
+            const w2 = new Set(n2.split(/\s+/).filter(w => w.length > 2));
+            if (w1.size === 0 || w2.size === 0) return 0;
+            const intersection = new Set([...w1].filter(w => w2.has(w)));
+            const union = new Set([...w1, ...w2]);
+            return intersection.size / union.size;
+        }
+
+        // Filter bad matches
+        const goodMatches = searchResults.filter(r => calculateSimilarity(title, r.title) >= 0.4);
+
+        if (goodMatches.length === 0) {
+            console.log(`No good matches found for "${title}". Best raw result was: ${searchResults[0].title}`);
+            return;
+        }
+
         // Search for a better match if season > 1
-        let bestMatch = searchResults[0];
+        let bestMatch = goodMatches[0];
         if (season > 1) {
-            const seasonMatch = searchResults.find(r => r.title.toLowerCase().includes(`season ${season}`) || r.title.toLowerCase().includes(` s${season}`));
+            const seasonMatch = goodMatches.find(r => r.title.toLowerCase().includes(`season ${season}`) || r.title.toLowerCase().includes(` s${season}`));
             if (seasonMatch) bestMatch = seasonMatch;
         }
 
