@@ -190,12 +190,42 @@ class UniversalExtractor {
 // MAIN ENTRY
 // =================================================================================
 
-async function getStreams(tmdbId, mediaType, season = null, episode = null) {
+async function search(query) {
+  console.log(`[Tamilblasters] Searching for: ${query}`);
+  try {
+    const searchUrl = `${MAIN_URL}/index.php?/search/&q=${encodeURIComponent(query)}&quick=1`;
+    const res = await fetchWithTimeout(searchUrl, { headers: HEADERS });
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const results = [];
+
+    $(".ipsStreamItem_title a").each((i, el) => {
+      const a = $(el);
+      const href = a.attr("href");
+      if (href && href.includes('/forums/topic/')) {
+        results.push({
+          title: a.text().trim(),
+          id: href,
+          href: href
+        });
+      }
+    });
+    return results;
+  } catch (error) {
+    console.error(`[Tamilblasters] Search error: ${error.message}`);
+    return [];
+  }
+}
+
+async function getStreams(tmdbId, type, season = null, episode = null) {
+  // Normalize media type
+  const mediaType = (type === 'tv' || type === 'tvshow') ? 'tv' : 'movie';
+
   if (mediaType === 'movie') {
     season = null;
     episode = null;
   }
-  const isNumeric = /^\d+$/.test(tmdbId);
+  const isNumeric = /^\d+$/.test(String(tmdbId));
 
   console.log(`[Tamilblasters] 🚀 Starting High-Speed Fetch for ${mediaType}: ${tmdbId}`);
 
@@ -380,7 +410,7 @@ async function getStreams(tmdbId, mediaType, season = null, episode = null) {
               url: result.url,
               quality: result.quality,
               headers: checkHeaders,
-              provider: 'Tamilblasters'
+              provider: 'tamilblasters'
             });
           }
         }));
@@ -396,10 +426,10 @@ async function getStreams(tmdbId, mediaType, season = null, episode = null) {
   }
 }
 
-// Export the main function
+// Export the main functions
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { getStreams };
+  module.exports = { search, getStreams };
 } else {
   // For React Native environment
-  global.getStreams = { getStreams };
+  global.getStreams = { search, getStreams };
 }
