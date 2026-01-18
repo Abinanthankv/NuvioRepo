@@ -190,24 +190,25 @@ class UniversalExtractor {
 // MAIN ENTRY
 // =================================================================================
 
-async function getStreams(tmdbId, mediaType, season = season, episode = episode) {
+async function getStreams(tmdbId, mediaType, season = null, episode = null) {
   if (mediaType === 'movie') {
     season = null;
     episode = null;
   }
   const isNumeric = /^\d+$/.test(tmdbId);
-  const targetTitle = isNumeric ? null : tmdbId;
 
   console.log(`[Tamilblasters] 🚀 Starting High-Speed Fetch for ${mediaType}: ${tmdbId}`);
 
   try {
     // 1. Resolve Media Info (TMDB Lookup with Retry)
-    let mediaInfo;
+    let mediaInfo = { title: tmdbId, year: null };
+
     if (isNumeric) {
       let attempts = 0;
       while (attempts < 3) {
         try {
-          const res = await fetchWithTimeout(`${TMDB_BASE_URL}/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?api_key=${TMDB_API_KEY}`);
+          // Use mediaType directly from getStreams for TMDB fetching
+          const res = await fetchWithTimeout(`${TMDB_BASE_URL}/${mediaType}/${tmdbId}?api_key=${TMDB_API_KEY}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           mediaInfo = {
@@ -222,12 +223,6 @@ async function getStreams(tmdbId, mediaType, season = season, episode = episode)
           if (attempts < 3) await new Promise(r => setTimeout(r, 1000));
         }
       }
-      if (!mediaInfo) {
-        console.log(`[Tamilblasters] TMDB Failed after 3 attempts, falling back.`);
-        mediaInfo = { title: tmdbId, year: null };
-      }
-    } else {
-      mediaInfo = { title: tmdbId, year: null };
     }
 
     // 2. Site Search using Resolved Title
