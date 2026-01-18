@@ -399,7 +399,7 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
                             url: result.url,
                             quality: result.quality,
                             headers: checkHeaders,
-                            provider: 'tamilblasters-bz'
+                            provider: 'tamilblastersbz'
                         });
                     }
                 }));
