@@ -31,7 +31,7 @@
         "tv"
       ],
       "filename": "src/providers/tamilblasters.js",
-      "enabled": false,
+      "enabled": true,
       "contentLanguage": [
         "ta",
         "en"
