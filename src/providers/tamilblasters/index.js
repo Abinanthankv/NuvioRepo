@@ -190,7 +190,11 @@ class UniversalExtractor {
 // MAIN ENTRY
 // =================================================================================
 
-async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = null) {
+async function getStreams(tmdbId, mediaType, season = season, episode = episode) {
+  if (mediaType === 'movie') {
+    season = null;
+    episode = null;
+  }
   const isNumeric = /^\d+$/.test(tmdbId);
   const targetTitle = isNumeric ? null : tmdbId;
 
@@ -256,7 +260,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
     const matches = searchResults
       .filter(r => {
         const score = calculateTitleSimilarity(mediaInfo.title, r.title);
-        const yearMatch = !mediaInfo.year || r.title.includes(mediaInfo.year);
+        const yearMatch = !mediaInfo.year || mediaType === 'tv' || r.title.includes(mediaInfo.year);
         console.log(`[Tamilblasters] Candidate Match: "${r.title}" (Score: ${score.toFixed(2)}, YearMatch: ${yearMatch})`);
         return score > 0.4 && yearMatch;
       })
