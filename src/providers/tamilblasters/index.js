@@ -1,15 +1,15 @@
-// Tamilblasters Scraper for Nuvio Local Scrapers - Revamped Version 2.1
-// Focus: Extreme Speed, High Reliability, and Universal Extraction for 1tamilblasters.bz
+// Tamilblasters Scraper for Nuvio Local Scrapers - Revamped Version 2.2
+// Focus: Extreme Speed, High Reliability, and Universal Extraction using 1tamilblasters.business
 
 const cheerio = require('cheerio-without-node-native');
 
 // Configuration
 const TMDB_API_KEY = '1b3113663c9004682ed61086cf967c44';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-let MAIN_URL = "https://1tamilblasters.bz";
+let MAIN_URL = "https://www.1tamilblasters.business";
 
 const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
   "Referer": `${MAIN_URL}/`,
   "Accept": "*/*",
   "Accept-Language": "en-US,en;q=0.9",
@@ -222,24 +222,48 @@ class UniversalExtractor {
 // =================================================================================
 
 async function search(query) {
-  console.log(`[Tamilblasters] Searching for: ${query}`);
+  const url = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
+  console.log(`[Tamilblasters] Searching: ${url}`);
   try {
-    const searchUrl = `${MAIN_URL}/index.php?/search/&q=${encodeURIComponent(query)}&quick=1`;
-    const res = await fetchWithTimeout(searchUrl, { headers: HEADERS });
-    const html = await res.text();
+    const response = await fetchWithTimeout(url, { headers: HEADERS }, 8000);
+
+    // Detect domain redirect (from business.txt logic)
+    if (response.url && !response.url.includes(new URL(MAIN_URL).hostname)) {
+      try {
+        const finalUrl = new URL(response.url);
+        if (finalUrl.protocol.startsWith('http')) {
+          console.log(`[Tamilblasters] Domain redirect detected: ${MAIN_URL} -> ${finalUrl.origin}`);
+          MAIN_URL = finalUrl.origin;
+          HEADERS.Referer = `${MAIN_URL}/`;
+        }
+      } catch (e) { }
+    }
+
+    const html = await response.text();
     const $ = cheerio.load(html);
     const results = [];
 
-    $(".ipsStreamItem_title a").each((i, el) => {
-      const a = $(el);
-      const href = a.attr("href");
-      if (href && href.includes('/forums/topic/')) {
-        results.push({
-          title: a.text().trim(),
-          href: href
-        });
+    // Blog style selectors (from business.txt)
+    $(".posts-wrapper article, .nv-index-posts article, article.post").each((i, el) => {
+      const titleEl = $(el).find("h2.entry-title a, h1.entry-title a");
+      const title = titleEl.text().trim();
+      const href = titleEl.attr("href");
+      if (title && href) {
+        results.push({ title, href });
       }
     });
+
+    // Fallback for forum style just in case
+    if (results.length === 0) {
+      $(".ipsStreamItem_title a").each((i, el) => {
+        const a = $(el);
+        const href = a.attr("href");
+        if (href && href.includes('/forums/topic/')) {
+          results.push({ title: a.text().trim(), href });
+        }
+      });
+    }
+
     return results;
   } catch (error) {
     console.error(`[Tamilblasters] Search error: ${error.message}`);
@@ -290,7 +314,7 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
     const matches = searchResults
       .filter(r => {
         const score = calculateTitleSimilarity(mediaInfo.title, r.title);
-        const yearMatch = !mediaInfo.year || mediaType === 'tv' || r.title.includes(mediaInfo.year);
+        const yearMatch = !mediaInfo.year || mediaType === 'tv' || r.title.includes(mediaInfo.year) || r.title.includes(String(parseInt(mediaInfo.year) + 1)) || r.title.includes(String(parseInt(mediaInfo.year) - 1));
         return score > 0.4 && yearMatch;
       })
       .sort((a, b) => {
@@ -313,9 +337,11 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
         const pageRes = await fetchWithTimeout(match.href, { headers: HEADERS });
         const pageHtml = await pageRes.text();
         const $ = cheerio.load(pageHtml);
-        const fullPageTitle = $("h1.ipsType_pageTitle").text().trim() || $("h1.entry-title").text().trim() || match.title;
 
-        const yrMatch = fullPageTitle.match(/\(?(\d{4})\)?/);
+        // Support both forum and blog style titles
+        const fullPageTitle = $("h1.entry-title").text().trim() || $("h1.ipsType_pageTitle").text().trim() || match.title;
+
+        const yrMatch = (fullPageTitle + " " + match.title).match(/\(?(\d{4})\)?/);
         const matchYear = yrMatch ? yrMatch[1] : (mediaInfo.year || 'N/A');
 
         const streamsInPage = [];
@@ -325,17 +351,28 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
 
           let label = `Stream ${i + 1}`;
           let current = $(el);
+
+          // Enhanced label discovery
           for (let j = 0; j < 5; j++) {
             let prev = current.prev();
             if (prev.length === 0) { current = current.parent(); if (!current.length || current.is('body')) break; continue; }
             const text = prev.text().trim();
-            if (text.toLowerCase().includes('episode') || text.match(/EP\d+/i) || text.match(/\(\d+-\d+\)/)) { label = text; break; }
+            if (text.toLowerCase().includes('episode') || text.match(/EP\d+/i) || text.match(/\(\d+-\d+\)/) || text.toLowerCase().includes('stream')) {
+              label = text.replace(/[\r\n]+/g, " ").trim();
+              break;
+            }
             current = prev;
           }
+
+          if (label.toLowerCase().includes("episode")) {
+            const epMatch = label.match(/Episode\s*[–-ー]\s*(\d+)/i) || label.match(/Episode\s*(\d+)/i) || label.match(/EP\s*(\d+)/i);
+            if (epMatch) label = `EP${epMatch[1]}`;
+          }
+
           streamsInPage.push({ url: src, label });
         });
 
-        // Use Promise.all for extraction in single page
+        // Extraction
         await Promise.all(streamsInPage.map(async (s) => {
           if (allFinalStreams.length >= targetResults) return;
 
@@ -347,28 +384,23 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
           let detectedE = eLabelMatch ? parseInt(eLabelMatch[1]) : null;
 
           if (detectedS === null) {
-            const sTitleMatch = fullPageTitle.match(/S(\d+)/i) || fullPageTitle.match(/Season\s*(\d+)/i);
+            const sTitleMatch = (fullPageTitle + " " + match.title).match(/S(\d+)/i) || (fullPageTitle + " " + match.title).match(/Season\s*(\d+)/i);
             if (sTitleMatch) detectedS = parseInt(sTitleMatch[1]);
           }
           if (detectedE === null) {
-            const eTitleMatch = fullPageTitle.match(/E(\d+)/i) || fullPageTitle.match(/Episode\s*(\d+)/i) || fullPageTitle.match(/EP\s*(\d+)/i);
+            const eTitleMatch = (fullPageTitle + " " + match.title).match(/E(\d+)/i) || (fullPageTitle + " " + match.title).match(/Episode\s*(\d+)/i) || (fullPageTitle + " " + match.title).match(/EP\s*(\d+)/i);
             if (eTitleMatch) detectedE = parseInt(eTitleMatch[1]);
           }
 
-          // Strict Filtering for TV
+          // TV Filtering
           if (mediaType === 'tv') {
             if (season !== null && detectedS !== null && detectedS !== season) return;
             if (episode !== null) {
               if (detectedE !== null && detectedE !== episode) {
-                // Check for range match
                 const rangeMatch = s.label.match(/(\d+)-(\d+)/) || fullPageTitle.match(/(\d+)-(\d+)/);
                 if (rangeMatch) {
-                  const start = parseInt(rangeMatch[1]);
-                  const end = parseInt(rangeMatch[2]);
-                  if (episode < start || episode > end) return;
-                } else {
-                  return;
-                }
+                  if (episode < parseInt(rangeMatch[1]) || episode > parseInt(rangeMatch[2])) return;
+                } else return;
               }
             }
           }
@@ -376,7 +408,7 @@ async function getStreams(tmdbId, type = 'movie', season = null, episode = null)
           const result = await UniversalExtractor.extract(s.url);
           if (!result) return;
 
-          const checkHeaders = { ...HEADERS, 'Referer': result.referer, 'Origin': result.origin };
+          const checkHeaders = { ...HEADERS, 'Referer': result.referer || s.url, 'Origin': result.origin || new URL(s.url).origin };
           const isPlayable = await checkLink(result.url, checkHeaders);
 
           if (isPlayable) {

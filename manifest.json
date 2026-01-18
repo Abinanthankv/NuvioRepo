@@ -24,13 +24,32 @@
       "id": "tamilblasters",
       "name": "Tamilblasters",
       "description": "Tamilblasters provider for Nuvio.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "User",
       "supportedTypes": [
         "movie",
         "tv"
       ],
       "filename": "src/providers/tamilblasters.js",
+      "enabled": true,
+      "logo": "https://1tamilblasters.bz/uploads/monthly_2025_10/169356039_TBLwhitelogo.png.50e3c98229dab88b167074a68df15caf.png",
+      "contentLanguage": [
+        "ta",
+        "en"
+      ],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "tamilblasters-bz",
+      "name": "Tamilblasters BZ",
+      "description": "Tamilblasters BZ (Forum) provider for Nuvio - More comprehensive releases.",
+      "version": "1.0.0",
+      "author": "User",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "src/providers/tamilblasters-bz.js",
       "enabled": true,
       "logo": "https://1tamilblasters.bz/uploads/monthly_2025_10/169356039_TBLwhitelogo.png.50e3c98229dab88b167074a68df15caf.png",
       "contentLanguage": [
