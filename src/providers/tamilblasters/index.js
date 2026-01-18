@@ -880,4 +880,3 @@ if (typeof module !== 'undefined' && module.exports) {
   // For React Native environment
   global.getStreams = { getStreams };
 }
-
