@@ -172,13 +172,19 @@ async function getStreams(id, type, season, episode) {
                     for (const source of sources) {
                         let url = source.url;
                         const quality = source.quality || 'Auto';
+
+                        let streamHeaders = { ...commonHeaders };
+                        if (url.includes('owocdn.top')) {
+                            streamHeaders['Referer'] = 'https://kwik.cx/';
+                        }
+
                         streams.push({
                             name: `AnimeLok - ${serverName} - ${quality}`,
                             quality: quality,
                             title: formatTitle(data.anime || data.movie, quality, season, episode, languages, hasSubtitles),
                             url: url,
                             type: 'hls',
-                            headers: commonHeaders,
+                            headers: streamHeaders,
                             subtitles
                         });
                     }
@@ -189,19 +195,24 @@ async function getStreams(id, type, season, episode) {
             // Handle other direct m3u8 links (often master playlists)
             else if (server.url.includes('.m3u8')) {
                 let masterUrl = server.url;
+                let streamHeaders = { ...commonHeaders };
+                if (masterUrl.includes('owocdn.top')) {
+                    streamHeaders['Referer'] = 'https://kwik.cx/';
+                }
+
                 streams.push({
                     name: `AnimeLok - ${serverName} - Auto`,
                     quality: 'Auto',
                     title: formatTitle(data.anime || data.movie, 'Auto', season, episode, languages, hasSubtitles),
                     url: masterUrl,
                     type: 'hls',
-                    headers: commonHeaders,
+                    headers: streamHeaders,
                     subtitles
                 });
 
                 // Resolve individual qualities
                 try {
-                    const resolved = await resolveHlsPlaylist(server.url, commonHeaders);
+                    const resolved = await resolveHlsPlaylist(server.url, streamHeaders);
                     if (resolved && resolved.variants && resolved.variants.length > 0) {
                         for (const variant of resolved.variants) {
                             let vUrl = variant.url;
@@ -212,7 +223,7 @@ async function getStreams(id, type, season, episode) {
                                 title: formatTitle(data.anime || data.movie, variant.quality, season, episode, languages, hasSubtitles, extraInfo),
                                 url: vUrl,
                                 type: 'hls',
-                                headers: commonHeaders,
+                                headers: streamHeaders,
                                 subtitles
                             });
                         }
