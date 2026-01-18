@@ -6,7 +6,7 @@ const cheerio = require('cheerio-without-node-native');
 // Configuration
 const TMDB_API_KEY = '1b3113663c9004682ed61086cf967c44';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-let MAIN_URL = "https://www.1tamilblasters.business";
+let MAIN_URL = "https://1tamilblasters.bz";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
@@ -227,36 +227,46 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
     }
 
     // 2. Site Search using Resolved Title
-    const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(mediaInfo.title)}`;
+    const searchUrl = `${MAIN_URL}/index.php?/search/&q=${encodeURIComponent(mediaInfo.title)}&quick=1`;
     const res = await fetchWithTimeout(searchUrl, { headers: HEADERS });
     const html = await res.text();
     const $ = cheerio.load(html);
     const searchResults = [];
-    $(".posts-wrapper article, .nv-index-posts article").each((i, el) => {
-      const a = $(el).find("h2.entry-title a");
+
+    // New selector for Invision Community search results
+    $(".ipsStreamItem_title a").each((i, el) => {
+      const a = $(el);
       if (a.length) searchResults.push({ title: a.text().trim(), href: a.attr("href") });
     });
 
     // Fallback: If 0 results for TMDB title, try the numeric ID just in case
     if (searchResults.length === 0 && isNumeric) {
       console.log(`[Tamilblasters] 0 results for title, trying numeric search...`);
-      const resId = await fetchWithTimeout(`${MAIN_URL}/?s=${tmdbId}`, { headers: HEADERS });
+      const resId = await fetchWithTimeout(`${MAIN_URL}/index.php?/search/&q=${tmdbId}&quick=1`, { headers: HEADERS });
       const htmlId = await resId.text();
       const $Id = cheerio.load(htmlId);
-      $(".posts-wrapper article, .nv-index-posts article").each((i, el) => {
-        const a = $Id(el).find("h2.entry-title a");
+      $Id(".ipsStreamItem_title a").each((i, el) => {
+        const a = $Id(el);
         if (a.length) searchResults.push({ title: a.text().trim(), href: a.attr("href") });
       });
     }
     console.log(`[Tamilblasters] Found ${searchResults.length} search results`);
 
     // 2. High-Precision Matching
-    const matches = searchResults.filter(r => {
-      const score = calculateTitleSimilarity(mediaInfo.title, r.title);
-      const yearMatch = !mediaInfo.year || r.title.includes(mediaInfo.year);
-      console.log(`[Tamilblasters] Candidate Match: "${r.title}" (Score: ${score.toFixed(2)}, YearMatch: ${yearMatch})`);
-      return score > 0.4 && yearMatch;
-    }).slice(0, 3); // Top 3 pages
+    const matches = searchResults
+      .filter(r => {
+        const score = calculateTitleSimilarity(mediaInfo.title, r.title);
+        const yearMatch = !mediaInfo.year || r.title.includes(mediaInfo.year);
+        console.log(`[Tamilblasters] Candidate Match: "${r.title}" (Score: ${score.toFixed(2)}, YearMatch: ${yearMatch})`);
+        return score > 0.4 && yearMatch;
+      })
+      .sort((a, b) => {
+        const aWatch = a.title.toLowerCase().includes('watch online') ? 1 : 0;
+        const bWatch = b.title.toLowerCase().includes('watch online') ? 1 : 0;
+        if (aWatch !== bWatch) return bWatch - aWatch;
+        return calculateTitleSimilarity(mediaInfo.title, b.title) - calculateTitleSimilarity(mediaInfo.title, a.title);
+      })
+      .slice(0, 8); // Top 8 pages prioritized by "Watch Online"
 
     if (matches.length === 0) return [];
 
