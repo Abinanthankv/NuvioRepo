@@ -24,14 +24,14 @@
       "id": "tamilblasters",
       "name": "Tamilblasters",
       "description": "Tamilblasters provider for Nuvio.",
-      "version": "1.0.1",
+      "version": "1.0.0",
       "author": "User",
       "supportedTypes": [
         "movie",
         "tv"
       ],
       "filename": "src/providers/tamilblasters.js",
-      "enabled": true,
+      "enabled": false,
       "contentLanguage": [
         "ta",
         "en"
