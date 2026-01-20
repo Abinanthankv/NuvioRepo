@@ -31,7 +31,7 @@
         "tv"
       ],
       "filename": "src/providers/tamilblasters.js",
-      "enabled": false,
+      "enabled": true,
       "logo": "https://1tamilblasters.bz/uploads/monthly_2025_10/169356039_TBLwhitelogo.png.50e3c98229dab88b167074a68df15caf.png",
       "contentLanguage": [
         "ta",
