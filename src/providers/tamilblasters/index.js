@@ -51,15 +51,22 @@ async function fetchWithTimeout(url, options = {}, timeout = 10000) {
  */
 async function checkLink(url, headers = {}) {
   try {
-    const response = await fetchWithTimeout(url, {
+    const fetchOptions = {
       method: 'GET',
-      headers: {
-        ...headers,
-        'Range': 'bytes=0-0'
-      }
-    }, 5000);
-    return response.ok || response.status === 206;
+      headers: { ...headers }
+    };
+    
+    // Some HLS servers fail with Range header, specifically 502/403 errors
+    if (!url.toLowerCase().includes('.m3u8')) {
+      fetchOptions.headers['Range'] = 'bytes=0-0';
+    }
+
+    const response = await fetchWithTimeout(url, fetchOptions, 5000);
+    const ok = response.ok || response.status === 206;
+    if (!ok) console.log(`[Tamilblasters] Link check failed for ${url.substring(0, 50)}... Status: ${response.status} Headers: ${JSON.stringify(fetchOptions.headers)}`);
+    return ok;
   } catch (error) {
+    console.log(`[Tamilblasters] Link check error for ${url.substring(0, 50)}... : ${error.message}`);
     return false;
   }
 }
@@ -292,12 +299,12 @@ async function search(query) {
 /**
  * Detects quality variants and audio tracks from m3u8 stream manifest
  */
-async function detectQualityFromM3U8(m3u8Url) {
+async function detectQualityFromM3U8(m3u8Url, headers = {}) {
   try {
     const response = await fetchWithTimeout(m3u8Url, {
       headers: {
         ...HEADERS,
-        'Referer': MAIN_URL
+        'Referer': headers.Referer || MAIN_URL
       }
     }, 5000);
     const content = await response.text();
@@ -414,9 +421,9 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
     let html = await response.text();
 
     // Check if it's a landing page
-    if (html.includes('<title>Loading...</title>') || html.includes('Page is loading')) {
-      console.log(`[Tamilblasters] Detected landing page on ${hostName}, trying mirrors...`);
-      const mirrors = ['yuguaab.com', 'cavanhabg.com'];
+    if (html.includes('<title>Loading...</title>') || html.includes('Page is loading') || html.includes('Just a moment...') || html.length < 1000) {
+      console.log(`[Tamilblasters] Detected landing page or small content on ${hostName} (Length: ${html.length}), trying mirrors...`);
+      const mirrors = ['yuguaab.com', 'cavanhabg.com', 'swish.com', 'wish.com', 'audinifer.com', 'luluvstream.com', 'lulu.com'];
       for (const mirror of mirrors) {
         if (hostName.includes(mirror)) continue;
         const mirrorUrl = embedUrl.replace(hostName, mirror);
@@ -424,6 +431,7 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
           const mirrorRes = await fetchWithTimeout(mirrorUrl, { headers: { ...HEADERS, 'Referer': MAIN_URL } }, 3000);
           const mirrorHtml = await mirrorRes.text();
           if (mirrorHtml.includes('jwplayer') || mirrorHtml.includes('sources') || mirrorHtml.includes('eval(function(p,a,c,k,e,d)')) {
+            console.log(`[Tamilblasters] Found valid content on mirror: ${mirror}`);
             html = mirrorHtml;
             break;
           }
@@ -471,6 +479,12 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
         }
       }
     }
+    
+    if (allFoundUrls.length === 0) {
+      console.log(`[Tamilblasters] No URLs found in HTML (Length: ${html.length})`);
+    } else {
+      console.log(`[Tamilblasters] Found ${allFoundUrls.length} candidate URLs`);
+    }
 
     if (allFoundUrls.length > 0) {
       // Prioritize .m3u8 and URLs with params
@@ -486,7 +500,7 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
 
       const bestUrl = allFoundUrls[0];
       console.log(`[Tamilblasters] Detected best URL: ${bestUrl}. Resolving quality...`);
-      return await detectQualityFromM3U8(bestUrl);
+      return await detectQualityFromM3U8(bestUrl, { Referer: embedBase + "/" });
     }
 
     return [];
@@ -662,7 +676,8 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
             type,
             url: streamurl,
             label: displayLabel,
-            matchTitle: match.title
+            matchTitle: match.title,
+            referer: streamurl
           });
         });
 
@@ -700,7 +715,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                   isMaster: true
                 };
 
-                const isWorking = await checkLink(streamData.url, { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
+                const isWorking = await checkLink(streamData.url, { 'Referer': stream.referer || MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
                 if (isWorking && !seenUrls.has(streamData.url)) {
                   seenUrls.add(streamData.url);
                   directStreams.push(streamData);
@@ -715,7 +730,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                     isMaster: false
                   };
 
-                  const isWorking = await checkLink(streamData.url, { 'Referer': MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
+                  const isWorking = await checkLink(streamData.url, { 'Referer': stream.referer || MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
                   if (isWorking && !seenUrls.has(streamData.url)) {
                     seenUrls.add(streamData.url);
                     directStreams.push(streamData);
@@ -724,7 +739,7 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
               }
             }
           } catch (error) {
-            console.error(`[Tamilblasters] Failed to extract stream: ${error.message}`);
+            console.error(`[Tamilblasters] Failed to extract stream from ${stream.url}: ${error.message}`);
           }
         };
 
