@@ -8,12 +8,52 @@ const TMDB_API_KEY = '1b3113663c9004682ed61086cf967c44';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 // Tamilblasters Configuration
-let MAIN_URL = "https://www.1tamilblasters.business";
+// Tamilblasters Configuration
+let MAIN_URL = "https://www.1tamilblasters.auction";
+let IS_DOMAIN_RESOLVED = false;
 
 const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "Referer": `${MAIN_URL}/`,
 };
+
+const POSSIBLE_TLDS = ['auction', 'business', 'rodeo', 'pm', 'me', 'is', 'bet', 'li', 'yt', 'ws', 'vip', 'fun', 'today', 'site'];
+
+/**
+ * Dynamically resolves the active Tamilblasters domain
+ */
+async function resolveBaseUrl() {
+  if (IS_DOMAIN_RESOLVED) return MAIN_URL;
+
+  console.log("[Tamilblasters] Resolving active domain...");
+  
+  // Try current MAIN_URL first
+  try {
+    const res = await fetchWithTimeout(MAIN_URL, { method: 'HEAD' }, 3000);
+    if (res.ok) {
+      IS_DOMAIN_RESOLVED = true;
+      return MAIN_URL;
+    }
+  } catch (e) {}
+
+  for (const tld of POSSIBLE_TLDS) {
+    const url = `https://www.1tamilblasters.${tld}`;
+    try {
+      console.log(`[Tamilblasters] Checking: ${url}`);
+      const res = await fetchWithTimeout(url, { method: 'HEAD' }, 3000);
+      if (res.ok) {
+        MAIN_URL = url;
+        HEADERS.Referer = `${MAIN_URL}/`;
+        IS_DOMAIN_RESOLVED = true;
+        console.log(`[Tamilblasters] Resolved to: ${MAIN_URL}`);
+        return MAIN_URL;
+      }
+    } catch (e) {}
+  }
+
+  console.warn("[Tamilblasters] Could not resolve active domain, using fallback.");
+  return MAIN_URL;
+}
 
 // =================================================================================
 // UTILITY FUNCTIONS
@@ -26,7 +66,7 @@ const HEADERS = {
  * @param {number} timeout Timeout in milliseconds (default: 10000)
  * @returns {Promise<Response>}
  */
-async function fetchWithTimeout(url, options = {}, timeout = 10000) {
+async function fetchWithTimeout(url, options = {}, timeout = 15000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -53,17 +93,28 @@ async function checkLink(url, headers = {}) {
   try {
     const fetchOptions = {
       method: 'GET',
-      headers: { ...headers }
+      headers: { 
+        ...headers,
+        'Origin': headers.Referer ? new URL(headers.Referer).origin : undefined
+      }
     };
     
-    // Some HLS servers fail with Range header, specifically 502/403 errors
+    // HLS servers often fail with Range header (502/403)
     if (!url.toLowerCase().includes('.m3u8')) {
       fetchOptions.headers['Range'] = 'bytes=0-0';
     }
 
     const response = await fetchWithTimeout(url, fetchOptions, 5000);
     const ok = response.ok || response.status === 206;
-    if (!ok) console.log(`[Tamilblasters] Link check failed for ${url.substring(0, 50)}... Status: ${response.status} Headers: ${JSON.stringify(fetchOptions.headers)}`);
+    
+    // Some servers return 403/502 but work fine with a simple GET without Range
+    if (!ok && fetchOptions.headers['Range']) {
+        delete fetchOptions.headers['Range'];
+        const retryRes = await fetchWithTimeout(url, fetchOptions, 5000);
+        return retryRes.ok;
+    }
+
+    if (!ok) console.log(`[Tamilblasters] Link check failed for ${url.substring(0, 50)}... Status: ${response.status}`);
     return ok;
   } catch (error) {
     console.log(`[Tamilblasters] Link check error for ${url.substring(0, 50)}... : ${error.message}`);
@@ -246,11 +297,12 @@ async function getTMDBDetails(tmdbId, mediaType) {
  * Searches Tamilblasters for the given query
  */
 async function search(query) {
+  await resolveBaseUrl();
   const url = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
   console.log(`[Tamilblasters] Searching: ${url}`);
 
   try {
-    const response = await fetchWithTimeout(url, { headers: HEADERS }, 8000);
+    const response = await fetchWithTimeout(url, { headers: HEADERS }, 15000);
 
     // Detect if valid redirect happened (e.g. domain switch)
     if (response.url && !response.url.includes(new URL(MAIN_URL).hostname)) {
@@ -301,12 +353,24 @@ async function search(query) {
  */
 async function detectQualityFromM3U8(m3u8Url, headers = {}) {
   try {
-    const response = await fetchWithTimeout(m3u8Url, {
+    let response = await fetchWithTimeout(m3u8Url, {
       headers: {
         ...HEADERS,
         'Referer': headers.Referer || MAIN_URL
       }
     }, 5000);
+
+    // Fallback for some CDNs that block .m3u8 but allow .txt
+    if (response.status === 403 || response.status === 502) {
+        const txtUrl = m3u8Url.replace('.m3u8', '.txt');
+        console.log(`[Tamilblasters] m3u8 failed (${response.status}), trying .txt fallback: ${txtUrl}`);
+        response = await fetchWithTimeout(txtUrl, {
+            headers: {
+                ...HEADERS,
+                'Referer': headers.Referer || MAIN_URL
+            }
+        }, 5000);
+    }
     const content = await response.text();
 
     if (!content.includes('#EXTM3U')) {
@@ -376,7 +440,11 @@ async function detectQualityFromM3U8(m3u8Url, headers = {}) {
 
     return { variants: [{ url: m3u8Url, quality }], audios, isMaster: false, masterUrl: m3u8Url };
   } catch (error) {
-    console.error(`[Tamilblasters] Error detecting quality: ${error.message}`);
+    if (error.message.includes('502') || error.message.includes('403')) {
+        console.warn(`[Tamilblasters] Playlist fetch failed for ${m3u8Url.substring(0, 50)}... falling back to single quality.`);
+    } else {
+        console.error(`[Tamilblasters] Error detecting quality: ${error.message}`);
+    }
     return { variants: [{ url: m3u8Url, quality: "Unknown" }], audios: [], isMaster: false, masterUrl: m3u8Url };
   }
 }
@@ -404,10 +472,99 @@ async function extractDirectStream(embedUrl) {
 }
 
 /**
+ * Dynamically discovers the real content page from a landing page
+ */
+async function discoverContentPage(embedUrl, html) {
+  const embedBase = new URL(embedUrl).origin;
+  const hostName = new URL(embedUrl).hostname;
+  
+  console.log(`[Tamilblasters] Discovering content on ${hostName}...`);
+  
+  // 1. Try JS redirect patterns
+  const redirectMatch = html.match(/window\.location\.href\s*=\s*["']([^"']+)["']/i) || 
+                        html.match(/location\.href\s*=\s*["']([^"']+)["']/i) ||
+                        html.match(/meta\s*http-equiv=["']refresh["']\s*content=["']\d+;\s*url=([^"']+)["']/i);
+  
+  if (redirectMatch) {
+    let redirectUrl = redirectMatch[1];
+    if (redirectUrl.startsWith('/')) redirectUrl = embedBase + redirectUrl;
+    console.log(`[Tamilblasters] Following JS redirect: ${redirectUrl}`);
+    try {
+        const res = await fetchWithTimeout(redirectUrl, { headers: { ...HEADERS, 'Referer': embedUrl } }, 5000);
+        return await res.text();
+    } catch (e) {}
+  }
+
+  // 2. Try to find alternate domains if original fails
+  // These are common mirror patterns for these hosts (hgcloud, strwish, etc.)
+  const commonMirrors = [
+    { from: 'hgcloud', to: 'audinifer' },
+    { from: 'strwish', to: 'lulu' },
+    { from: 'swish', to: 'lulu' },
+    { from: 'luluvid', to: 'lulu' },
+    { from: 'iplayerhls', to: 'audinifer' }
+  ];
+  const commonTlds = ['com', 'to', 'me', 'net', 'biz', 'io', 'site', 'fun', 'today', 'xyz'];
+  const baseHost = hostName.split('.').slice(0, -1).join('.');
+  
+  if (baseHost) {
+      const candidates = [];
+      
+      // Try specific mappings
+      for (const mapping of commonMirrors) {
+          if (hostName.includes(mapping.from)) {
+              candidates.push(`${mapping.to}.com`);
+          }
+      }
+      
+      // Try TLD variations
+      for (const tld of commonTlds) {
+          if (!hostName.endsWith(`.${tld}`)) {
+              candidates.push(`${baseHost}.${tld}`);
+          }
+      }
+
+      for (const candHost of candidates) {
+          const mirrorUrl = embedUrl.replace(hostName, candHost);
+          try {
+              const res = await fetchWithTimeout(mirrorUrl, { headers: { ...HEADERS, 'Referer': MAIN_URL } }, 3000);
+              const pHtml = await res.text();
+              if (pHtml.includes('jwplayer') || pHtml.includes('sources') || pHtml.includes('eval(function')) {
+                  console.log(`[Tamilblasters] Discovered mirror: ${candHost}`);
+                  return pHtml;
+              }
+          } catch (e) {}
+      }
+  }
+
+  // 3. Last resort: try to find any link on the page that looks like a video link
+  const $ = cheerio.load(html);
+  let foundHtml = null;
+  const links = [];
+  $("a, iframe").each((i, el) => {
+      const href = $(el).attr("href") || $(el).attr("src");
+      if (href && (href.includes('/e/') || href.includes('/d/'))) {
+          links.push(href.startsWith('/') ? embedBase + href : href);
+      }
+  });
+
+  for (const link of links) {
+      if (link === embedUrl) continue;
+      try {
+          const res = await fetchWithTimeout(link, { headers: { ...HEADERS, 'Referer': embedUrl } }, 3000);
+          const pHtml = await res.text();
+          if (pHtml.includes('jwplayer') || pHtml.includes('sources') || pHtml.includes('eval(function')) {
+              foundHtml = pHtml;
+              break;
+          }
+      } catch (e) {}
+  }
+
+  return foundHtml;
+}
+
+/**
  * Generic extractor that looks for common video source patterns
- * @param {string} embedUrl The embed URL
- * @param {string} hostName Host identifier for logging
- * @returns {Promise<Array<{url: string, quality: string}>>} Array of stream variants
  */
 async function extractFromGenericEmbed(embedUrl, hostName) {
   try {
@@ -420,23 +577,10 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
     }, 5000);
     let html = await response.text();
 
-    // Check if it's a landing page
-    if (html.includes('<title>Loading...</title>') || html.includes('Page is loading') || html.includes('Just a moment...') || html.length < 1000) {
-      console.log(`[Tamilblasters] Detected landing page or small content on ${hostName} (Length: ${html.length}), trying mirrors...`);
-      const mirrors = ['yuguaab.com', 'cavanhabg.com', 'swish.com', 'wish.com', 'audinifer.com', 'luluvstream.com', 'lulu.com'];
-      for (const mirror of mirrors) {
-        if (hostName.includes(mirror)) continue;
-        const mirrorUrl = embedUrl.replace(hostName, mirror);
-        try {
-          const mirrorRes = await fetchWithTimeout(mirrorUrl, { headers: { ...HEADERS, 'Referer': MAIN_URL } }, 3000);
-          const mirrorHtml = await mirrorRes.text();
-          if (mirrorHtml.includes('jwplayer') || mirrorHtml.includes('sources') || mirrorHtml.includes('eval(function(p,a,c,k,e,d)')) {
-            console.log(`[Tamilblasters] Found valid content on mirror: ${mirror}`);
-            html = mirrorHtml;
-            break;
-          }
-        } catch (e) { }
-      }
+    // Check if it's a landing page (common with hgcloud, strwish, etc.)
+    if (html.includes('<title>Loading...</title>') || html.includes('Page is loading') || html.includes('Just a moment...') || html.length < 2000) {
+      const contentHtml = await discoverContentPage(embedUrl, html);
+      if (contentHtml) html = contentHtml;
     }
 
     // Check for Packer obfuscation
@@ -481,13 +625,12 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
     }
     
     if (allFoundUrls.length === 0) {
-      console.log(`[Tamilblasters] No URLs found in HTML (Length: ${html.length})`);
+      console.log(`[Tamilblasters] No direct URLs found on ${hostName}. HTML Context: ${html.substring(0, 100).replace(/\n/g, '')}...`);
     } else {
-      console.log(`[Tamilblasters] Found ${allFoundUrls.length} candidate URLs`);
+      console.log(`[Tamilblasters] Found ${allFoundUrls.length} candidate URLs on ${hostName}`);
     }
 
     if (allFoundUrls.length > 0) {
-      // Prioritize .m3u8 and URLs with params
       allFoundUrls.sort((a, b) => {
         const hasParamA = a.includes('?');
         const hasParamB = b.includes('?');
@@ -499,8 +642,7 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
       });
 
       const bestUrl = allFoundUrls[0];
-      console.log(`[Tamilblasters] Detected best URL: ${bestUrl}. Resolving quality...`);
-      return await detectQualityFromM3U8(bestUrl, { Referer: embedBase + "/" });
+      return await detectQualityFromM3U8(bestUrl, { Referer: embedUrl });
     }
 
     return [];
@@ -519,7 +661,8 @@ async function extractFromGenericEmbed(embedUrl, hostName) {
  * @returns {Promise<Array>} Array of stream objects
  */
 async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = null) {
-  console.log(`[Tamilblasters] Processing ${mediaType} ${tmdbId}`);
+  await resolveBaseUrl();
+  console.log(`[Tamilblasters] Processing ${mediaType} ${tmdbId} on ${MAIN_URL}`);
 
   try {
     let mediaInfo;
@@ -730,11 +873,19 @@ async function getStreams(tmdbId, mediaType = 'movie', season = null, episode = 
                     isMaster: false
                   };
 
-                  const isWorking = await checkLink(streamData.url, { 'Referer': stream.referer || MAIN_URL, 'User-Agent': HEADERS['User-Agent'] });
-                  if (isWorking && !seenUrls.has(streamData.url)) {
-                    seenUrls.add(streamData.url);
-                    directStreams.push(streamData);
-                  }
+                const checkOptions = { 'Referer': stream.referer || MAIN_URL, 'User-Agent': HEADERS['User-Agent'] };
+                let isWorking = await checkLink(streamData.url, checkOptions);
+                
+                // If master playlist fails but we can still possibly use it (sometimes 502 only on HEAD but GET works)
+                if (!isWorking && streamData.url.includes('master.m3u8')) {
+                    console.log(`[Tamilblasters] Master playlist failed check, attempting direct content fetch...`);
+                    isWorking = true; // Risk it for master playlists
+                }
+
+                if (isWorking && !seenUrls.has(streamData.url)) {
+                  seenUrls.add(streamData.url);
+                  directStreams.push(streamData);
+                }
                 }
               }
             }
